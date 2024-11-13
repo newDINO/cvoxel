@@ -1,15 +1,11 @@
-use std::ops::BitOr;
 use bitvec::prelude::*;
-use nalgebra::{point, vector, Isometry3, Point3, Translation, UnitQuaternion, Vector3};
+use nalgebra::{vector, Isometry3, Point3, Translation, UnitQuaternion, Vector3};
+use std::ops::BitOr;
 
 pub struct Triangle {
     pub vertex0: Point3<f32>,
     pub vertex1: Point3<f32>,
     pub vertex2: Point3<f32>,
-}
-pub struct Ray {
-    pub origin: Point3<f32>,
-    pub direction: Vector3<f32>,
 }
 
 impl Triangle {
@@ -23,14 +19,17 @@ impl Triangle {
     /// };
     /// let norm = triangle.cal_norm_cw();
     /// assert_eq!(norm, vector![0.0, 1.0, 0.0]);
-    /// 
+    ///
     /// ```
     pub fn cal_norm_cw(&self) -> Vector3<f32> {
         let v1 = self.vertex1 - self.vertex0;
         let v2 = self.vertex2 - self.vertex0;
-        v1.cross(&v2) 
+        v1.cross(&v2)
     }
-    pub fn intersect(&self, ray: &Ray) -> Option<Point3<f32>> {
+
+    /// Returns the traveling distance of the ray if there is an intersection,
+    /// including traveling backwards resulting in negative distance.
+    pub fn intersect(&self, ray: &Ray) -> Option<f32> {
         let epsilon = 1e-8;
 
         // Triangle vertices
@@ -69,21 +68,8 @@ impl Triangle {
         }
 
         // Calculate the distance along the ray to the intersection point
-        let t = f * edge2.dot(&q);
-
-        // Ray intersection
-        if t > epsilon {
-            // Calculate the intersection point
-            let intersection_point = ray.origin + ray.direction * t;
-            Some(intersection_point)
-        } else {
-            // This means that there is a line intersection but not a ray intersection
-            None
-        }
+        Some(f * edge2.dot(&q))
     }
-}
-
-impl Triangle {
     /// ```
     /// use nalgebra::point;
     /// use cvoxel::{Aabb, Triangle};
@@ -102,6 +88,16 @@ impl Triangle {
     }
 }
 
+pub struct Ray {
+    pub origin: Point3<f32>,
+    pub direction: Vector3<f32>,
+}
+impl Ray {
+    pub fn new(origin: Point3<f32>, direction: Vector3<f32>) -> Self {
+        Self { origin, direction }
+    }
+}
+
 #[derive(PartialEq, Debug)]
 pub struct Aabb {
     pub min: Point3<f32>,
@@ -115,7 +111,7 @@ impl Aabb {
     pub fn merge(&self, other: &Aabb) -> Aabb {
         Aabb {
             min: self.min.inf(&other.min),
-            max: self.max.sup(&other.max)
+            max: self.max.sup(&other.max),
         }
     }
     pub fn size(&self) -> Vector3<f32> {
@@ -153,11 +149,26 @@ pub fn voxelize(mesh: &[Triangle], dx: f32) -> Option<Voxels<BitVec>> {
     ];
     let mut data: BitVec = BitVec::with_capacity(shape.product());
     for k in 0..shape.z {
-        let z = k as f32 * dx + total_aabb.min.z;
+        let z = (k as f32 + 0.5) * dx + total_aabb.min.z;
         for j in 0..shape.y {
-            let y = j as f32 * dx + total_aabb.min.y;
+            let y = (j as f32 + 0.5) * dx + total_aabb.min.y;
+            let mut inside = false;
             for i in 0..shape.x {
-                let x = i as f32 * dx + total_aabb.min.x;
+                let xo = (i as f32 - 0.5) * dx + total_aabb.min.x;
+                let ray = Ray {
+                    origin: Point3::new(xo, y, z),
+                    direction: Vector3::new(1.0, 0.0, 0.0),
+                };
+                let mut max_t = 0.0;
+                for i in 0..mesh.len() {
+                    if let Some(t) = mesh[i].intersect(&ray) {
+                        if t > max_t && t <= dx {
+                            max_t = t;
+                            inside = mesh[i].cal_norm_cw().x < 0.0;
+                        }
+                    }
+                }
+                data.push(inside);
             }
         }
     }
@@ -166,6 +177,9 @@ pub fn voxelize(mesh: &[Triangle], dx: f32) -> Option<Voxels<BitVec>> {
         rotation: UnitQuaternion::identity(),
     };
     Some(Voxels {
-        shape, transform, dx, data
+        shape,
+        transform,
+        dx,
+        data,
     })
 }
