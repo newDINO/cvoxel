@@ -10,6 +10,7 @@ pub struct Triangle {
     pub vertex2: Point3<f32>,
 }
 
+
 impl Triangle {
     /// ```
     /// use cvoxel::Triangle;
@@ -145,7 +146,7 @@ impl BitAnd for Aabb {
     }
 }
 
-#[derive(PartialEq, Eq, num_enum::TryFromPrimitive)]
+#[derive(PartialEq, Eq, num_enum::TryFromPrimitive, Clone, Copy)]
 #[repr(u8)]
 pub enum CVoxelType {
     Body,
@@ -157,13 +158,13 @@ pub enum CVoxelType {
 
 pub struct CVoxels {
     pub shape: Vector3<usize>,
-    /// The position part is the x_min, y_min, z_min corner of the voxel object
+    /// The position part is the center of the voxel object.
     pub transform: Isometry3<f32>,
     pub dx: f32,
     pub data: Vec<CVoxelType>,
 }
 impl CVoxels {
-    // Regenerate VoxelCType.
+    /// Regenerate VoxelCType.
     pub fn regenerate_type(&mut self) {
         let area = self.area();
         for k in 0..self.shape.z {
@@ -225,10 +226,36 @@ impl CVoxels {
         }
     }
 
-    /// Voxelize a mesh. Returns None if the length of the mesh is zero.
-    pub fn from_mesh(mesh: &[Triangle], dx: f32) -> Option<CVoxels> {
+    pub fn from_indexed_mesh<T: num_traits::AsPrimitive<usize>>(vertices: &[[f32; 3]], indices: &[T], dx: f32) -> Option<CVoxels> {
+        let trimesh = indices
+            .iter()
+            .map(|i| vertices[i.as_()])
+            .collect::<Vec<[f32; 3]>>();
+        Self::from_trimesh(&trimesh, dx)
+    }
+
+    /// Voxelize a mesh. Returns None if the length of the vertices is zero or can not be devided by 3.
+    pub fn from_trimesh(vertices: &[[f32; 3]], dx: f32) -> Option<CVoxels> {
+        if vertices.len() % 3 != 0 {
+            return None;
+        }
+        let triangles = vertices
+            .chunks(3)
+            .map(|chunk| {
+                Triangle {
+                    vertex0: Point3::from(chunk[0]),
+                    vertex1: Point3::from(chunk[1]),
+                    vertex2: Point3::from(chunk[2]),
+                }
+            })
+            .collect::<Vec<Triangle>>();
+        Self::from_triangles(&triangles, dx)
+    }
+
+    /// Voxelize a mesh. Returns None if the length of the triangles is zero.
+    pub fn from_triangles(triangles: &[Triangle], dx: f32) -> Option<CVoxels> {
         // object attributes
-        let total_aabb = mesh
+        let total_aabb = triangles
             .iter()
             .map(|tri| tri.aabb())
             .reduce(|acc, cur| acc | cur)?;
@@ -239,7 +266,7 @@ impl CVoxels {
             (size.z / dx).ceil() as usize,
         ];
         let transform = Isometry3 {
-            translation: Translation::from(total_aabb.min.coords),
+            translation: Translation::from(total_aabb.middle().coords),
             rotation: UnitQuaternion::identity(),
         };
 
@@ -257,11 +284,11 @@ impl CVoxels {
                         direction: Vector3::new(1.0, 0.0, 0.0),
                     };
                     let mut max_t = 0.0;
-                    for i in 0..mesh.len() {
-                        if let Some(t) = mesh[i].intersect(&ray) {
+                    for i in 0..triangles.len() {
+                        if let Some(t) = triangles[i].intersect(&ray) {
                             if t > max_t && t <= dx {
                                 max_t = t;
-                                inside = mesh[i].cal_norm_cw().x < 0.0;
+                                inside = triangles[i].cal_norm_cw().x < 0.0;
                             }
                         }
                     }

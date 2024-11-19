@@ -9,3 +9,4 @@ edition = "2021"
 [dependencies]
 nalgebra = "*"
 num_enum = "*"
+num-traits = "*"
