@@ -1,6 +1,8 @@
-use bitvec::prelude::*;
 use nalgebra::{vector, Isometry3, Point3, Translation, UnitQuaternion, Vector3};
-use std::ops::BitOr;
+use num_enum::TryFromPrimitive;
+use std::ops::{BitAnd, BitOr};
+
+mod debug;
 
 pub struct Triangle {
     pub vertex0: Point3<f32>,
@@ -98,7 +100,7 @@ impl Ray {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone, Copy)]
 pub struct Aabb {
     pub min: Point3<f32>,
     pub max: Point3<f32>,
@@ -114,6 +116,15 @@ impl Aabb {
             max: self.max.sup(&other.max),
         }
     }
+    pub fn intersection(&self, other: &Aabb) -> Aabb {
+        Aabb {
+            min: self.min.sup(&other.min),
+            max: self.max.inf(&other.max),
+        }
+    }
+    pub fn is_empty(&self) -> bool {
+        self.min.x > self.max.x || self.min.y > self.max.y
+    }
     pub fn size(&self) -> Vector3<f32> {
         self.max - self.min
     }
@@ -127,59 +138,151 @@ impl BitOr for Aabb {
         self.merge(&rhs)
     }
 }
-
-pub struct Voxels<T> {
-    pub shape: Vector3<usize>,
-    pub transform: Isometry3<f32>,
-    pub dx: f32,
-    pub data: T,
+impl BitAnd for Aabb {
+    type Output = Aabb;
+    fn bitand(self, rhs: Self) -> Self::Output {
+        self.intersection(&rhs)
+    }
 }
 
-/// Returns None if the length of the mesh is zero.
-pub fn voxelize(mesh: &[Triangle], dx: f32) -> Option<Voxels<BitVec>> {
-    let total_aabb = mesh
-        .iter()
-        .map(|tri| tri.aabb())
-        .reduce(|acc, cur| acc | cur)?;
-    let size = total_aabb.size();
-    let shape = vector![
-        (size.x / dx).ceil() as usize,
-        (size.y / dx).ceil() as usize,
-        (size.z / dx).ceil() as usize,
-    ];
-    let mut data: BitVec = BitVec::with_capacity(shape.product());
-    for k in 0..shape.z {
-        let z = (k as f32 + 0.5) * dx + total_aabb.min.z;
-        for j in 0..shape.y {
-            let y = (j as f32 + 0.5) * dx + total_aabb.min.y;
-            let mut inside = false;
-            for i in 0..shape.x {
-                let xo = (i as f32 - 0.5) * dx + total_aabb.min.x;
-                let ray = Ray {
-                    origin: Point3::new(xo, y, z),
-                    direction: Vector3::new(1.0, 0.0, 0.0),
-                };
-                let mut max_t = 0.0;
-                for i in 0..mesh.len() {
-                    if let Some(t) = mesh[i].intersect(&ray) {
-                        if t > max_t && t <= dx {
-                            max_t = t;
-                            inside = mesh[i].cal_norm_cw().x < 0.0;
-                        }
+#[derive(PartialEq, Eq, num_enum::TryFromPrimitive)]
+#[repr(u8)]
+pub enum CVoxelType {
+    Body,
+    Face,
+    Edge,
+    Corner,
+    Air,
+}
+
+pub struct CVoxels {
+    pub shape: Vector3<usize>,
+    /// The position part is the x_min, y_min, z_min corner of the voxel object
+    pub transform: Isometry3<f32>,
+    pub dx: f32,
+    pub data: Vec<CVoxelType>,
+}
+impl CVoxels {
+    // Regenerate VoxelCType.
+    pub fn regenerate_type(&mut self) {
+        let area = self.area();
+        for k in 0..self.shape.z {
+            let k_part = k * area;
+            for j in 0..self.shape.y {
+                let j_part = j * self.shape.x;
+                for i in 0..self.shape.x {
+                    let coord = k_part + j_part + i;
+
+                    if self.data[coord] == CVoxelType::Air {
+                        continue;
                     }
+
+                    let mut air_axis_cound: u8 = 0;
+
+                    if k == 0
+                        || k == self.shape.z - 1
+                        || self.data[coord - area] == CVoxelType::Air
+                        || self.data[coord + area] == CVoxelType::Air
+                    {
+                        air_axis_cound += 1;
+                    };
+                    if j == 0
+                        || j == self.shape.y - 1
+                        || self.data[coord - self.shape.x] == CVoxelType::Air
+                        || self.data[coord + self.shape.x] == CVoxelType::Air
+                    {
+                        air_axis_cound += 1;
+                    };
+                    if i == 0
+                        || i == self.shape.x - 1
+                        || self.data[coord - 1] == CVoxelType::Air
+                        || self.data[coord + 1] == CVoxelType::Air
+                    {
+                        air_axis_cound += 1;
+                    };
+
+                    self.data[coord] = CVoxelType::try_from_primitive(air_axis_cound).unwrap();
                 }
-                data.push(inside);
             }
         }
     }
-    let transform = Isometry3 {
-        translation: Translation::from(total_aabb.middle().coords),
-        rotation: UnitQuaternion::identity(),
-    };
-    Some(Voxels {
-        shape,
-        transform,
-        dx,
-        data,
-    })
+
+    /// self.shape.x * self.shape.y
+    pub fn area(&self) -> usize {
+        self.shape.x * self.shape.y
+    }
+
+    /// self.shape.cast::<f32>() * self.dx
+    pub fn size(&self) -> Vector3<f32> {
+        self.shape.cast::<f32>() * self.dx
+    }
+
+    pub fn aabb(&self) -> Aabb {
+        let min = self.transform.translation.vector.into();
+        Aabb {
+            min,
+            max: min + self.size(),
+        }
+    }
+
+    /// Voxelize a mesh. Returns None if the length of the mesh is zero.
+    pub fn from_mesh(mesh: &[Triangle], dx: f32) -> Option<CVoxels> {
+        // object attributes
+        let total_aabb = mesh
+            .iter()
+            .map(|tri| tri.aabb())
+            .reduce(|acc, cur| acc | cur)?;
+        let size = total_aabb.size();
+        let shape = vector![
+            (size.x / dx).ceil() as usize,
+            (size.y / dx).ceil() as usize,
+            (size.z / dx).ceil() as usize,
+        ];
+        let transform = Isometry3 {
+            translation: Translation::from(total_aabb.min.coords),
+            rotation: UnitQuaternion::identity(),
+        };
+
+        // fill voxels
+        let mut data = Vec::with_capacity(shape.product());
+        for k in 0..shape.z {
+            let z = (k as f32 + 0.5) * dx + total_aabb.min.z;
+            for j in 0..shape.y {
+                let y = (j as f32 + 0.5) * dx + total_aabb.min.y;
+                let mut inside = false;
+                for i in 0..shape.x {
+                    let xo = (i as f32 - 0.5) * dx + total_aabb.min.x;
+                    let ray = Ray {
+                        origin: Point3::new(xo, y, z),
+                        direction: Vector3::new(1.0, 0.0, 0.0),
+                    };
+                    let mut max_t = 0.0;
+                    for i in 0..mesh.len() {
+                        if let Some(t) = mesh[i].intersect(&ray) {
+                            if t > max_t && t <= dx {
+                                max_t = t;
+                                inside = mesh[i].cal_norm_cw().x < 0.0;
+                            }
+                        }
+                    }
+                    if inside {
+                        data.push(CVoxelType::Body);
+                    } else {
+                        data.push(CVoxelType::Air)
+                    }
+                }
+            }
+        }
+
+        // generate types
+        let mut cvoxels = CVoxels {
+            shape,
+            transform,
+            dx,
+            data,
+        };
+        cvoxels.regenerate_type();
+
+        Some(cvoxels)
+    }
 }
