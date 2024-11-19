@@ -1,3 +1,6 @@
+[workspace]
+members = ["example"]
+
 [package]
 name = "cvoxel"
 version = "0.1.0"
