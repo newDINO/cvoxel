@@ -7,3 +7,6 @@ edition = "2021"
 cvoxel = { path = "../" }
 bevy = { version = "*", features = ["dynamic_linking"] }
 bytemuck = "*"
+bevy_egui = "*"
+bevy_panorbit_camera = "*"
+nalgebra = "*"

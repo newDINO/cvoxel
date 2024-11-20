@@ -2,8 +2,7 @@ use nalgebra::{vector, Isometry3, Point3, Translation, UnitQuaternion, Vector3};
 use num_enum::TryFromPrimitive;
 use std::ops::{BitAnd, BitOr};
 
-pub mod debug;
-pub mod clipping;
+mod debug;
 
 pub struct Triangle {
     pub vertex0: Point3<f32>,
@@ -150,6 +149,93 @@ impl BitAnd for Aabb {
     }
 }
 
+/// Oriented Bounding Box. Untested.
+pub struct Obb {
+    pub transform: Isometry3<f32>,
+    pub half_size: Vector3<f32>,
+}
+impl Obb {
+    pub fn aabb(&self) -> Aabb {
+        let ws_half_extents = self
+            .transform
+            .rotation
+            .to_rotation_matrix()
+            .into_inner()
+            .abs()
+            * self.half_size;
+        let center = Point3::from(self.transform.translation.vector);
+        let min = center - ws_half_extents;
+        let max = center + ws_half_extents;
+        Aabb { min, max }
+    }
+    pub fn vertices(&self) -> [Point3<f32>; 8] {
+        let t = self.transform;
+        let e = self.half_size;
+        [
+            t * Point3::new(e.x, e.y, e.z),
+            t * Point3::new(-e.x, e.y, e.z),
+            t * Point3::new(e.x, -e.y, e.z),
+            t * Point3::new(-e.x, -e.y, e.z),
+            t * Point3::new(e.x, e.y, -e.z),
+            t * Point3::new(-e.x, e.y, -e.z),
+            t * Point3::new(e.x, -e.y, -e.z),
+            t * Point3::new(-e.x, -e.y, -e.z),
+        ]
+    }
+    pub fn intersect(&self, other: &Obb) -> bool {
+        let r1 = self.transform.rotation.to_rotation_matrix();
+        let m1 = r1.matrix();
+        let x1 = m1.column(0).clone_owned();
+        let y1 = m1.column(1).clone_owned();
+        let z1 = m1.column(2).clone_owned();
+        let v1 = self.vertices();
+
+        let r2 = self.transform.rotation.to_rotation_matrix();
+        let m2 = r2.matrix();
+        let x2 = m2.column(0).clone_owned();
+        let y2 = m2.column(1).clone_owned();
+        let z2 = m2.column(2).clone_owned();
+        let v2 = other.vertices();
+
+        sat_intersect(&v1, &v2, x1)
+            && sat_intersect(&v1, &v2, x2)
+            && sat_intersect(&v1, &v2, y1)
+            && sat_intersect(&v1, &v2, y2)
+            && sat_intersect(&v1, &v2, z1)
+            && sat_intersect(&v1, &v2, z2)
+            && sat_intersect(&v1, &v2, x1.cross(&x2))
+            && sat_intersect(&v1, &v2, x1.cross(&y2))
+            && sat_intersect(&v1, &v2, x1.cross(&z2))
+            && sat_intersect(&v1, &v2, y1.cross(&x2))
+            && sat_intersect(&v1, &v2, y1.cross(&y2))
+            && sat_intersect(&v1, &v2, y1.cross(&z2))
+            && sat_intersect(&v1, &v2, z1.cross(&x2))
+            && sat_intersect(&v1, &v2, z1.cross(&y2))
+            && sat_intersect(&v1, &v2, z1.cross(&z2))
+    }
+}
+
+/// Separating Axis Theorem.
+pub fn sat_intersect(
+    vertices1: &[Point3<f32>],
+    vertices2: &[Point3<f32>],
+    axis: Vector3<f32>,
+) -> bool {
+    if vertices1.is_empty() || vertices2.is_empty() {
+        return false;
+    }
+    let fold_min_max = |(min, max): (f32, f32), acc: f32| (acc.min(min), acc.max(max));
+    let (min1, max1) = vertices1
+        .iter()
+        .map(|v| v.coords.dot(&axis))
+        .fold((f32::MAX, f32::MIN), fold_min_max);
+    let (min2, max2) = vertices2
+        .iter()
+        .map(|v| v.coords.dot(&axis))
+        .fold((f32::MAX, f32::MIN), fold_min_max);
+    min1 < max2 && max1 > min2
+}
+
 #[derive(PartialEq, Eq, num_enum::TryFromPrimitive, Clone, Copy)]
 #[repr(u8)]
 pub enum CVoxelType {
@@ -160,7 +246,6 @@ pub enum CVoxelType {
     Air,
 }
 
-#[derive(Default)]
 pub struct CVoxels {
     pub shape: Vector3<usize>,
     /// The position part is the center of the voxel object.
@@ -213,13 +298,15 @@ impl CVoxels {
         }
     }
 
-    pub fn aabb(&self) -> Aabb {
-        let ws_half_extents =
-            self.transform.rotation.to_rotation_matrix().matrix().abs() * 0.5 * self.size();
-        Aabb {
-            min: (self.transform.translation.vector - ws_half_extents).into(),
-            max: (self.transform.translation.vector + ws_half_extents).into(),
+    pub fn obb(&self) -> Obb {
+        Obb {
+            half_size: self.size() * 0.5,
+            transform: self.transform,
         }
+    }
+
+    pub fn aabb(&self) -> Aabb {
+        self.obb().aabb()
     }
 
     /// self.shape.x * self.shape.y
@@ -232,7 +319,6 @@ impl CVoxels {
         self.shape.cast::<f32>() * self.dx
     }
 
-    /// Voxelize a mesh. Returns None if the length of the indices can not be devided by 3.
     pub fn from_indexed_mesh<T: num_traits::AsPrimitive<usize>>(
         vertices: &[[f32; 3]],
         indices: &[T],
@@ -245,7 +331,7 @@ impl CVoxels {
         Self::from_trimesh(&trimesh, dx)
     }
 
-    /// Voxelize a mesh. Returns None if the length of the vertices can not be devided by 3.
+    /// Voxelize a mesh. Returns None if the length of the vertices is zero or can not be devided by 3.
     pub fn from_trimesh(vertices: &[[f32; 3]], dx: f32) -> Option<CVoxels> {
         if vertices.len() % 3 != 0 {
             return None;
@@ -258,20 +344,16 @@ impl CVoxels {
                 vertex2: Point3::from(chunk[2]),
             })
             .collect::<Vec<Triangle>>();
-        Some(Self::from_triangles(&triangles, dx))
+        Self::from_triangles(&triangles, dx)
     }
 
-    pub fn from_triangles(triangles: &[Triangle], dx: f32) -> CVoxels {
+    /// Voxelize a mesh. Returns None if the length of the triangles is zero.
+    pub fn from_triangles(triangles: &[Triangle], dx: f32) -> Option<CVoxels> {
         // object attributes
-        let total_aabb = if let Some(aabb) = triangles
+        let total_aabb = triangles
             .iter()
             .map(|tri| tri.aabb())
-            .reduce(|acc, cur| acc | cur)
-        {
-            aabb
-        } else {
-            return Self::default();
-        };
+            .reduce(|acc, cur| acc | cur)?;
         let size = total_aabb.size();
         let shape = vector![
             (size.x / dx).ceil() as usize,
@@ -323,6 +405,6 @@ impl CVoxels {
         };
         cvoxels.regenerate_type();
 
-        cvoxels
+        Some(cvoxels)
     }
 }
