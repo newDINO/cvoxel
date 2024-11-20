@@ -10,7 +10,6 @@ pub struct Triangle {
     pub vertex2: Point3<f32>,
 }
 
-
 impl Triangle {
     /// ```
     /// use cvoxel::Triangle;
@@ -101,6 +100,7 @@ impl Ray {
     }
 }
 
+/// Axis-Aligned Bounding Box.
 #[derive(PartialEq, Debug, Clone, Copy)]
 pub struct Aabb {
     pub min: Point3<f32>,
@@ -123,6 +123,9 @@ impl Aabb {
             max: self.max.inf(&other.max),
         }
     }
+    pub fn intersect(&self, other: &Aabb) -> bool {
+        self.intersection(other).is_empty()
+    }
     pub fn is_empty(&self) -> bool {
         self.min.x > self.max.x || self.min.y > self.max.y
     }
@@ -144,6 +147,42 @@ impl BitAnd for Aabb {
     fn bitand(self, rhs: Self) -> Self::Output {
         self.intersection(&rhs)
     }
+}
+
+/// Oriented Bounding Box.
+pub struct Obb {
+    pub transform: Isometry3<f32>,
+    pub half_size: Vector3<f32>,
+}
+impl Obb {
+    pub fn aabb(&self) -> Aabb {
+        let ws_half_extents = self.transform.rotation.to_rotation_matrix().into_inner().abs() * self.half_size;
+        let center = Point3::from(self.transform.translation.vector);
+        let min = center - ws_half_extents;
+        let max = center + ws_half_extents;
+        Aabb {
+            min, max
+        }
+    }
+}
+
+/// Separating Axis Theorem.
+pub fn sat_intersect(vertices1: &[Vector3<f32>], vertices2: &[Vector3<f32>], axis: Vector3<f32>) -> bool {
+    if vertices1.is_empty() || vertices2.is_empty() {
+        return false;
+    }
+    let fold_min_max = |(min, max): (f32, f32), acc: f32| {
+        (acc.min(min), acc.max(max))
+    };
+    let (min1, max1) = vertices1
+        .iter()
+        .map(|v| v.dot(&axis))
+        .fold((f32::MAX, f32::MIN), fold_min_max);
+    let (min2, max2) = vertices2
+        .iter()
+        .map(|v| v.dot(&axis))
+        .fold((f32::MAX, f32::MIN), fold_min_max);
+    max1 > min2 && min1 < max2
 }
 
 #[derive(PartialEq, Eq, num_enum::TryFromPrimitive, Clone, Copy)]
@@ -208,6 +247,17 @@ impl CVoxels {
         }
     }
 
+    pub fn obb(&self) -> Obb {
+        Obb {
+            half_size: self.size() * 0.5,
+            transform: self.transform
+        }
+    }
+
+    pub fn aabb(&self) -> Aabb {
+        self.obb().aabb()
+    }
+
     /// self.shape.x * self.shape.y
     pub fn area(&self) -> usize {
         self.shape.x * self.shape.y
@@ -216,14 +266,6 @@ impl CVoxels {
     /// self.shape.cast::<f32>() * self.dx
     pub fn size(&self) -> Vector3<f32> {
         self.shape.cast::<f32>() * self.dx
-    }
-
-    pub fn aabb(&self) -> Aabb {
-        let min = self.transform.translation.vector.into();
-        Aabb {
-            min,
-            max: min + self.size(),
-        }
     }
 
     pub fn from_indexed_mesh<T: num_traits::AsPrimitive<usize>>(vertices: &[[f32; 3]], indices: &[T], dx: f32) -> Option<CVoxels> {
