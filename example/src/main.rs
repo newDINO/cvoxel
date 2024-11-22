@@ -5,11 +5,10 @@ use bevy::{
         render_asset::RenderAssetUsages,
     },
 };
+use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin};
 use cvoxel::CVoxels;
-use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use nalgebra::UnitQuaternion;
-
 
 fn main() {
     App::new()
@@ -25,24 +24,25 @@ fn main() {
 
 #[derive(Component)]
 struct CVoxelComponent {
-    inner: CVoxels
+    inner: CVoxels,
 }
 
 fn update_from_cvoxel_transform(mut query: Query<(&CVoxelComponent, &mut Transform)>) {
     for (cvoxels, mut transform) in query.iter_mut() {
-        transform.translation = Vec3::from_array(cvoxels.inner.transform.translation.vector.data.0[0]);
-        transform.rotation = Quat::from_array(cvoxels.inner.transform.rotation.quaternion().coords.data.0[0]);
+        transform.translation =
+            Vec3::from_array(cvoxels.inner.transform.translation.vector.data.0[0]);
+        transform.rotation =
+            Quat::from_array(cvoxels.inner.transform.rotation.quaternion().coords.data.0[0]);
     }
 }
 
-fn draw_voxel_aabb(
-    voxels: Query<&CVoxelComponent>,
-    mut gizmos: Gizmos
-) {
+fn draw_voxel_aabb(voxels: Query<&CVoxelComponent>, mut gizmos: Gizmos) {
     for cvoxels in voxels.iter() {
         let mut transform = Transform::IDENTITY;
-        transform.translation = Vec3::from_array(cvoxels.inner.transform.translation.vector.data.0[0]);
-        transform.rotation = Quat::from_array(cvoxels.inner.transform.rotation.quaternion().coords.data.0[0]);
+        transform.translation =
+            Vec3::from_array(cvoxels.inner.transform.translation.vector.data.0[0]);
+        transform.rotation =
+            Quat::from_array(cvoxels.inner.transform.rotation.quaternion().coords.data.0[0]);
         transform.scale = Vec3::from_array(cvoxels.inner.size().data.0[0]);
         gizmos.cuboid(transform, Color::linear_rgb(0.0, 1.0, 0.0));
     }
@@ -83,14 +83,26 @@ fn cvoxel_transform_ui(
         for mut cvoxel in voxels.iter_mut() {
             let transform = &mut cvoxel.inner.transform;
 
-            let speed= 0.01;
+            let speed = 0.01;
 
             let mut euler = transform.rotation.euler_angles();
             ui.label("Euler:");
-            
-            ui.add(egui::DragValue::new(&mut euler.0).prefix("roll: ").speed(speed));
-            ui.add(egui::DragValue::new(&mut euler.1).prefix("pitch: ").speed(speed));
-            ui.add(egui::DragValue::new(&mut euler.2).prefix("yaw: ").speed(speed));
+
+            ui.add(
+                egui::DragValue::new(&mut euler.0)
+                    .prefix("roll: ")
+                    .speed(speed),
+            );
+            ui.add(
+                egui::DragValue::new(&mut euler.1)
+                    .prefix("pitch: ")
+                    .speed(speed),
+            );
+            ui.add(
+                egui::DragValue::new(&mut euler.2)
+                    .prefix("yaw: ")
+                    .speed(speed),
+            );
             transform.rotation = UnitQuaternion::from_euler_angles(euler.0, euler.1, euler.2);
 
             let pos = &mut transform.translation.vector.data.0[0];
@@ -103,7 +115,7 @@ fn cvoxel_transform_ui(
     let mut panorbit = panorbit.single_mut();
     if let Some(inner) = response {
         let response = inner.response;
-        
+
         if response.ctx.is_using_pointer() {
             panorbit.enabled = false;
         }
@@ -158,9 +170,7 @@ fn setup(
                 material: materials.add(Color::WHITE),
                 ..Default::default()
             },
-            CVoxelComponent {
-                inner: cvoxel,
-            }
+            CVoxelComponent { inner: cvoxel },
         ));
     }
 }

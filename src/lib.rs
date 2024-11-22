@@ -2,8 +2,8 @@ use nalgebra::{vector, Isometry3, Point3, Translation, UnitQuaternion, Vector3};
 use num_enum::TryFromPrimitive;
 use std::ops::{BitAnd, BitOr};
 
-pub mod debug;
 pub mod clipping;
+pub mod debug;
 
 pub struct Triangle {
     pub vertex0: Point3<f32>,
