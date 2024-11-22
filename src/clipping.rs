@@ -25,13 +25,24 @@ impl Line2dWithSide {
         p1.lerp(&p2, -d1 / (d2 - d1))
     }
 
+    pub fn intersect_ray(&self, origin: &Point2<f32>, point_at: &Point2<f32>) -> Option<Point2<f32>> {
+        let d_start = origin.coords.dot(&self.normal) - self.distance;
+        let d_dir = point_at.coords.dot(&self.normal) - self.distance;
+        let weight = -d_start / (d_dir - d_start);
+        if weight > 0.0 {
+            Some(origin.lerp(&point_at, weight))
+        } else {
+            None
+        }
+    }
+
     /// If `out` is true, then `point.coord.dot(&line.normal) > line.distance` will be clipped,
     /// else `point.coord.dot(&line.normal) < line.distance` will be clipped.
-    /// 
+    ///
     /// Panic if the polygon contains no vertices.
     pub fn clip_polygon(&self, polygon: &[Point2<f32>]) -> Vec<Point2<f32>> {
         let mut result = Vec::new();
-    
+
         let mut vp = polygon[0];
         let mut dp = vp.coords.dot(&self.normal) - self.distance;
         let mut vp_reserve = self.out && dp < 0.0 || !self.out && dp > 0.0;
@@ -39,7 +50,7 @@ impl Line2dWithSide {
             let vn = polygon[i];
             let dn = vn.coords.dot(&self.normal) - self.distance;
             let vn_reserve = self.out && dn < 0.0 || !self.out && dn > 0.0;
-    
+
             if vp_reserve {
                 result.push(vp);
                 if !vn_reserve {
@@ -50,7 +61,7 @@ impl Line2dWithSide {
                     result.push(vp.lerp(&vn, -dp / (dn - dp)));
                 }
             }
-    
+
             vp = vn;
             dp = dn;
             vp_reserve = vn_reserve;
@@ -80,13 +91,13 @@ impl PlaneWithBasis {
     pub fn from_plane(plane: Plane, out: bool) -> Self {
         let up1 = Vector3::y_axis();
         let up2 = Vector3::z_axis();
-        
+
         let up = if plane.normal.dot(&up1) > plane.normal.dot(&up2) {
             up1
         } else {
             up2
         };
-        
+
         let x_basis = UnitVector3::new_unchecked(plane.normal.cross(&up));
         let y_basis = UnitVector3::new_unchecked(plane.normal.cross(&x_basis));
         Self {
@@ -94,7 +105,7 @@ impl PlaneWithBasis {
         }
     }
 
-    /// Returns None `if self.plane.normal.cross(&rhs.plane.normal).magnitude_squared() < epsilon`, 
+    /// Returns None `if self.plane.normal.cross(&rhs.plane.normal).magnitude_squared() < epsilon`,
     /// else return the intersection line in each representation.
     pub fn intersection_lines(&self, rhs: &PlaneWithBasis, epsilon: f32) -> Option<(Line2dWithSide, Line2dWithSide)> {
         let v = self.plane.normal.cross(&rhs.plane.normal);
@@ -171,7 +182,7 @@ impl PolygonPlane {
                     return;
                 };
                 self.vertices = line1.clip_polygon(&self.vertices);
-                
+
                 let dir2 = Vector2::new(-line2.normal.y, line2.normal.x);
                 if dir2.dot(&line_in_plane.line.normal) < epsilon {
                     return;
@@ -186,7 +197,7 @@ impl PolygonPlane {
                 })
             },
             Clippable::Open(open_lines) => {
-                let lines = self.plane.intersection_lines(&open_lines.plane, epsilon);
+                let lines = self.plane .intersection_lines(&open_lines.plane, epsilon);
                 let (line1, line2) = if let Some(lines) = lines {
                     lines
                 } else {
@@ -194,7 +205,26 @@ impl PolygonPlane {
                 };
                 self.vertices = line1.clip_polygon(&self.vertices);
 
-                
+                let start_origin = open_lines.points[1];
+                let d_start_origin = start_origin.coords.dot(&line2.normal) - line2.distance;
+                let start_origin_in = d_start_origin > 0.0 && line2.out || d_start_origin < 0.0 && !line2.out;
+
+                let end_origin = open_lines.points[open_lines.points.len() - 2];
+                let d_end_origin = end_origin.coords.dot(&line2.normal) - line2.distance;
+                let end_origin_in = d_end_origin > 0.0 && line2.out || d_end_origin < 0.0 && !line2.out;
+
+                let start_cross = line2.intersect_ray(&start_origin, &open_lines.points[1]);
+                let end_cross = line2.intersect_ray(&end_origin, open_lines.points.last().unwrap());
+
+                if start_origin_in {
+                    if let Some(start_cross) = start_cross {
+                        if end_origin_in {
+                            if let Some(end_cross) = end_cross {
+
+                            }
+                        }
+                    }
+                }
             }
             _ => {}
         }
