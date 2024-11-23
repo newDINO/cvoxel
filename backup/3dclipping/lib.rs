@@ -2,6 +2,7 @@ use nalgebra::{vector, Isometry3, Point3, Translation, UnitQuaternion, Vector3};
 use num_enum::TryFromPrimitive;
 use std::ops::{BitAnd, BitOr};
 
+pub mod clipping;
 pub mod debug;
 
 pub struct Triangle {
@@ -168,35 +169,6 @@ pub struct CVoxels {
     pub data: Vec<CVoxelType>,
 }
 impl CVoxels {
-    /// Aabb in world space
-    pub fn aabb(&self) -> Aabb {
-        let ws_half_extents =
-            self.transform.rotation.to_rotation_matrix().matrix().abs() * 0.5 * self.size();
-        Aabb {
-            min: (self.transform.translation.vector - ws_half_extents).into(),
-            max: (self.transform.translation.vector + ws_half_extents).into(),
-        }
-    }
-
-    /// Aabb in local space
-    pub fn local_aabb(&self) -> Aabb {
-        let half_extents = 0.5 * self.size();
-        Aabb {
-            min: Point3::from(-half_extents),
-            max: Point3::from(half_extents)
-        }
-    }
-
-    /// self.shape.x * self.shape.y
-    pub fn area(&self) -> usize {
-        self.shape.x * self.shape.y
-    }
-
-    /// self.shape.cast::<f32>() * self.dx
-    pub fn size(&self) -> Vector3<f32> {
-        self.shape.cast::<f32>() * self.dx
-    }
-
     /// Regenerate VoxelCType.
     pub fn regenerate_type(&mut self) {
         let area = self.area();
@@ -239,6 +211,25 @@ impl CVoxels {
                 }
             }
         }
+    }
+
+    pub fn aabb(&self) -> Aabb {
+        let ws_half_extents =
+            self.transform.rotation.to_rotation_matrix().matrix().abs() * 0.5 * self.size();
+        Aabb {
+            min: (self.transform.translation.vector - ws_half_extents).into(),
+            max: (self.transform.translation.vector + ws_half_extents).into(),
+        }
+    }
+
+    /// self.shape.x * self.shape.y
+    pub fn area(&self) -> usize {
+        self.shape.x * self.shape.y
+    }
+
+    /// self.shape.cast::<f32>() * self.dx
+    pub fn size(&self) -> Vector3<f32> {
+        self.shape.cast::<f32>() * self.dx
     }
 
     /// Voxelize a mesh. Returns None if the length of the indices can not be devided by 3.
@@ -333,108 +324,5 @@ impl CVoxels {
         cvoxels.regenerate_type();
 
         cvoxels
-    }
-
-    /// The aabb(in self local space) of the intersection part with another CVoxels.
-    pub fn intersection_aabb(&self, rhs: &CVoxels) -> Option<Aabb> {
-        let mut vertices: [Point3<f32>; 8] = [
-            Point3::new(-0.5, -0.5, -0.5),
-            Point3::new(0.5, -0.5, -0.5),
-            Point3::new(0.5, 0.5, -0.5),
-            Point3::new(-0.5, 0.5, -0.5),
-            Point3::new(-0.5, -0.5, 0.5),
-            Point3::new(0.5, -0.5, 0.5),
-            Point3::new(0.5, 0.5, 0.5),
-            Point3::new(-0.5, 0.5, 0.5),
-        ];
-        let size = rhs.size();
-        let transform = self.transform.inverse() * rhs.transform;
-        for vertex in &mut vertices {
-            *vertex = transform * Point3::from(vertex.coords.component_mul(&size));
-        }
-        const LINE_INDICES: [(u8, u8); 12] = [
-            (0, 1),
-            (1, 2),
-            (2, 3),
-            (3, 0),
-
-            (0, 4),
-            (1, 5),
-            (2, 6),
-            (3, 7),
-
-            (4, 5),
-            (5, 6),
-            (6, 7),
-            (7, 4),
-        ];
-
-        let self_aabb = self.local_aabb();
-
-        const MAX_POINT: Point3<f32> = Point3::new(f32::MAX, f32::MAX, f32::MAX);
-        const MIN_POINT: Point3<f32> = Point3::new(f32::MIN, f32::MIN, f32::MIN);
-        let mut min = MAX_POINT;
-        let mut max = MIN_POINT;
-
-        let arg_min_max = |x1: f32, x2: f32| -> ((usize, f32), (usize, f32)) {
-            if x1 < x2 {
-                ((0, x1), (1, x2))
-            } else {
-                ((1, x2), (0, x1))
-            }
-        };
-
-        for line_index in LINE_INDICES {
-            let mut line = [vertices[line_index.0 as usize], vertices[line_index.1 as usize]];
-
-            let ((x_min_i, mut x_min), (x_max_i, x_max)) = arg_min_max(line[0].x, line[1].x);
-            if x_max < self_aabb.min.x || x_min > self_aabb.max.x {
-                continue;
-            }
-            if x_min < self_aabb.min.x {
-                line[x_min_i] = line[x_min_i].lerp(&line[x_max_i], (self_aabb.min.x - x_min) / (x_max - x_min));
-                x_min = self_aabb.min.x;
-            }
-            if x_max > self_aabb.max.x {
-                line[x_max_i] = line[x_min_i].lerp(&line[x_max_i], (self_aabb.max.x - x_min) / (x_max - x_min));
-            }
-
-            let ((y_min_i, mut y_min), (y_max_i, y_max)) = arg_min_max(line[0].y, line[1].y);
-            if y_max < self_aabb.min.y || y_min > self_aabb.max.y {
-                continue;
-            }
-            if y_min < self_aabb.min.y {
-                line[y_min_i] = line[y_min_i].lerp(&line[y_max_i], (self_aabb.min.y - y_min) / (y_max - y_min));
-                y_min = self_aabb.min.y;
-            }
-            if y_max > self_aabb.max.y {
-                line[y_max_i] = line[y_min_i].lerp(&line[y_max_i], (self_aabb.max.y - y_min) / (y_max - y_min));
-            }
-
-            let ((z_min_i, mut z_min), (z_max_i, z_max)) = arg_min_max(line[0].z, line[1].z);
-            if z_max < self_aabb.min.z || z_min > self_aabb.max.z {
-                continue;
-            }
-            if z_min < self_aabb.min.z {
-                line[z_min_i] = line[z_min_i].lerp(&line[z_max_i], (self_aabb.min.z - z_min) / (z_max - z_min));
-                z_min = self_aabb.min.z;
-            }
-            if z_max > self_aabb.max.z {
-                line[z_max_i] = line[z_min_i].lerp(&line[z_max_i], (self_aabb.max.z - z_min) / (z_max - z_min));
-            }
-
-            min = min.inf(&line[0]);
-            min = min.inf(&line[1]);
-            max = max.sup(&line[0]);
-            max = max.sup(&line[1]);
-        }
-        
-        if min != MAX_POINT {
-            Some(Aabb {
-                min, max
-            })
-        } else {
-            None
-        }
     }
 }

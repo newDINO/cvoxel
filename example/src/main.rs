@@ -18,6 +18,7 @@ fn main() {
         .add_systems(Startup, setup)
         .add_systems(Update, update_from_cvoxel_transform)
         .add_systems(Update, draw_voxel_aabb)
+        .add_systems(Update, draw_voxel_intersection)
         .add_systems(Update, cvoxel_transform_ui)
         .run();
 }
@@ -25,6 +26,17 @@ fn main() {
 #[derive(Component)]
 struct CVoxelComponent {
     inner: CVoxels,
+}
+
+fn isometry_scale_to_transform(isometry: &nalgebra::Isometry3<f32>, scale: &nalgebra::Vector3<f32>) -> Transform {
+    let mut transform = Transform::IDENTITY;
+    transform.translation =
+        Vec3::from_array(isometry.translation.vector.data.0[0]);
+    transform.rotation =
+        Quat::from_array(isometry.rotation.quaternion().coords.data.0[0]);
+    transform.scale = Vec3::from_array(scale.data.0[0]);
+    transform
+
 }
 
 fn update_from_cvoxel_transform(mut query: Query<(&CVoxelComponent, &mut Transform)>) {
@@ -38,13 +50,27 @@ fn update_from_cvoxel_transform(mut query: Query<(&CVoxelComponent, &mut Transfo
 
 fn draw_voxel_aabb(voxels: Query<&CVoxelComponent>, mut gizmos: Gizmos) {
     for cvoxels in voxels.iter() {
-        let mut transform = Transform::IDENTITY;
-        transform.translation =
-            Vec3::from_array(cvoxels.inner.transform.translation.vector.data.0[0]);
-        transform.rotation =
-            Quat::from_array(cvoxels.inner.transform.rotation.quaternion().coords.data.0[0]);
-        transform.scale = Vec3::from_array(cvoxels.inner.size().data.0[0]);
+        let transform = isometry_scale_to_transform(&cvoxels.inner.transform, &cvoxels.inner.size());
         gizmos.cuboid(transform, Color::linear_rgb(0.0, 1.0, 0.0));
+    }
+}
+
+fn draw_voxel_intersection(voxels: Query<&CVoxelComponent>, mut gizmos: Gizmos) {
+    for (i, ci) in voxels.iter().enumerate() {
+        for (j, cj) in voxels.iter().enumerate() {
+            if i == j {
+                continue;
+            }
+            if let Some(aabb) = ci.inner.intersection_aabb(&cj.inner) {
+                let translation = aabb.middle().coords;
+                let scale = aabb.size();
+                let mut isometry = nalgebra::Isometry3::identity();
+                isometry.translation = translation.into();
+                isometry = ci.inner.transform * isometry;
+                let transform = isometry_scale_to_transform(&isometry, &scale);
+                gizmos.cuboid(transform, Color::linear_rgb(1.0, 0.0, 0.0));
+            }
+        }
     }
 }
 
@@ -118,6 +144,8 @@ fn cvoxel_transform_ui(
 
         if response.ctx.is_using_pointer() {
             panorbit.enabled = false;
+        } else {
+            panorbit.enabled = true;
         }
     } else {
         panorbit.enabled = true;
