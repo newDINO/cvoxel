@@ -1,4 +1,4 @@
-use nalgebra::{vector, Isometry3, Point2, Point3, Translation, UnitQuaternion, Vector2, Vector3};
+use nalgebra::{vector, Isometry3, Point3, Translation, UnitQuaternion, Vector3};
 use num_enum::TryFromPrimitive;
 use std::ops::{BitAnd, BitOr};
 
@@ -335,7 +335,8 @@ impl CVoxels {
         cvoxels
     }
 
-    pub fn intersection_aabb(&self, rhs: &mut CVoxels) {
+    /// The aabb(in self local space) of the intersection part with another CVoxels.
+    pub fn intersection_aabb(&self, rhs: &CVoxels) -> Option<Aabb> {
         let mut vertices: [Point3<f32>; 8] = [
             Point3::new(-0.5, -0.5, -0.5),
             Point3::new(0.5, -0.5, -0.5),
@@ -370,92 +371,70 @@ impl CVoxels {
 
         let self_aabb = self.local_aabb();
 
-        let mut lines = Vec::with_capacity(12);
-        for i in 0..LINE_INDICES.len() {
-            let (i1, i2) = LINE_INDICES[i];
-            lines.push([vertices[i1 as usize], vertices[i2 as usize]]);
-        }
+        const MAX_POINT: Point3<f32> = Point3::new(f32::MAX, f32::MAX, f32::MAX);
+        const MIN_POINT: Point3<f32> = Point3::new(f32::MIN, f32::MIN, f32::MIN);
+        let mut min = MAX_POINT;
+        let mut max = MIN_POINT;
 
-        fn arg_min_max(x1: f32, x2: f32) -> ((usize, f32), (usize, f32)) {
+        let arg_min_max = |x1: f32, x2: f32| -> ((usize, f32), (usize, f32)) {
             if x1 < x2 {
                 ((0, x1), (1, x2))
             } else {
                 ((1, x2), (0, x1))
             }
-        }
-        fn cross_2d(v1: Vector2<f32>, v2: Vector2<f32>) -> f32 {
-            v1.x * v2.y - v1.y * v2.x
-        }
-        fn convex_sort(points: &mut [Point2<f32>]) {
-            if points.len() <= 3 {
-                return;
-            }
-            let ref_point = points[0];
-            points[1..].sort_unstable_by(|a, b| {
-                let cw = cross_2d(a - ref_point, b - ref_point) > 0.0;
-                if cw {
-                    std::cmp::Ordering::Less
-                } else {
-                    std::cmp::Ordering::Greater
-                }
-            });
-        }
+        };
 
-        // clipping
-        // x max
-        let mut crossings = Vec::new();
-        let mut i = 0;
-        while i < lines.len() {
-            let ((min_i, min), (max_i, max)) = arg_min_max(lines[i][0].x, lines[i][1].x);
-            if min > self_aabb.max.x {
-                lines.swap_remove(i);
+        for line_index in LINE_INDICES {
+            let mut line = [vertices[line_index.0 as usize], vertices[line_index.1 as usize]];
+
+            let ((x_min_i, mut x_min), (x_max_i, x_max)) = arg_min_max(line[0].x, line[1].x);
+            if x_max < self_aabb.min.x || x_min > self_aabb.max.x {
                 continue;
             }
-            if max > self_aabb.max.x {
-                let crossing = lines[i][min_i].lerp(&lines[i][max_i], (self_aabb.max.x - min) / (max - min));
-                lines[i][max_i] = crossing;
-                crossings.push(Point2::new(crossing.y, crossing.z));
+            if x_min < self_aabb.min.x {
+                line[x_min_i] = line[x_min_i].lerp(&line[x_max_i], (self_aabb.min.x - x_min) / (x_max - x_min));
+                x_min = self_aabb.min.x;
             }
-            i += 1;
-        }
-        convex_sort(&mut crossings);
-        if crossings.len() >= 2 {
-            for i in 1..crossings.len() {
-                let p1 = crossings[i - 1];
-                let p2 = crossings[i];
-                lines.push([
-                    Point3::new(self_aabb.max.x, p1.x, p1.y),
-                    Point3::new(self_aabb.max.x, p2.x, p2.y),
-                ])
+            if x_max > self_aabb.max.x {
+                line[x_max_i] = line[x_min_i].lerp(&line[x_max_i], (self_aabb.max.x - x_min) / (x_max - x_min));
             }
-        }
-        // x min
-        crossings.clear();
-        let mut i = 0;
-        while i < lines.len() {
-            let ((min_i, min), (max_i, max)) = arg_min_max(lines[i][0].x, lines[i][1].x);
-            if max < self_aabb.min.x {
-                lines.swap_remove(i);
+
+            let ((y_min_i, mut y_min), (y_max_i, y_max)) = arg_min_max(line[0].y, line[1].y);
+            if y_max < self_aabb.min.y || y_min > self_aabb.max.y {
                 continue;
             }
-            if min < self_aabb.min.x {
-                let crossing = lines[i][min_i].lerp(&lines[i][max_i], (self_aabb.min.x - min) / (max - min));
-                lines[i][min_i] = crossing;
-                crossings.push(Point2::new(crossing.y, crossing.z));
+            if y_min < self_aabb.min.y {
+                line[y_min_i] = line[y_min_i].lerp(&line[y_max_i], (self_aabb.min.y - y_min) / (y_max - y_min));
+                y_min = self_aabb.min.y;
             }
-            i += 1;
-        }
-        convex_sort(&mut crossings);
-        if crossings.len() >= 2 {
-            for i in 1..crossings.len() {
-                let p1 = crossings[i - 1];
-                let p2 = crossings[i];
-                lines.push([
-                    Point3::new(self_aabb.min.x, p1.x, p1.y),
-                    Point3::new(self_aabb.min.x, p2.x, p2.y),
-                ])
+            if y_max > self_aabb.max.y {
+                line[y_max_i] = line[y_min_i].lerp(&line[y_max_i], (self_aabb.max.y - y_min) / (y_max - y_min));
             }
-        }
 
+            let ((z_min_i, mut z_min), (z_max_i, z_max)) = arg_min_max(line[0].z, line[1].z);
+            if z_max < self_aabb.min.z || z_min > self_aabb.max.z {
+                continue;
+            }
+            if z_min < self_aabb.min.z {
+                line[z_min_i] = line[z_min_i].lerp(&line[z_max_i], (self_aabb.min.z - z_min) / (z_max - z_min));
+                z_min = self_aabb.min.z;
+            }
+            if z_max > self_aabb.max.z {
+                line[z_max_i] = line[z_min_i].lerp(&line[z_max_i], (self_aabb.max.z - z_min) / (z_max - z_min));
+            }
+
+            min = min.inf(&line[0]);
+            min = min.inf(&line[1]);
+            max = max.sup(&line[0]);
+            max = max.sup(&line[1]);
+        }
+        
+        if min != MAX_POINT {
+            Some(Aabb {
+                min, max
+            })
+        } else {
+            None
+        }
     }
 }

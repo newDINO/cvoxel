@@ -18,9 +18,14 @@ fn main() {
         .add_systems(Startup, setup)
         .add_systems(Update, update_from_cvoxel_transform)
         .add_systems(Update, draw_voxel_aabb)
-        .add_systems(Update, draw_voxel_intersection)
-        .add_systems(Update, cvoxel_transform_ui)
+        // .add_systems(Update, draw_voxel_intersection)
+        .add_systems(Update, ui)
         .run();
+}
+
+#[derive(Resource)]
+struct AppSettings {
+    show_bounding_box: bool
 }
 
 #[derive(Component)]
@@ -48,31 +53,34 @@ fn update_from_cvoxel_transform(mut query: Query<(&CVoxelComponent, &mut Transfo
     }
 }
 
-fn draw_voxel_aabb(voxels: Query<&CVoxelComponent>, mut gizmos: Gizmos) {
+fn draw_voxel_aabb(settings: Res<AppSettings>, voxels: Query<&CVoxelComponent>, mut gizmos: Gizmos) {
+    if !settings.show_bounding_box {
+        return;
+    }
     for cvoxels in voxels.iter() {
         let transform = isometry_scale_to_transform(&cvoxels.inner.transform, &cvoxels.inner.size());
         gizmos.cuboid(transform, Color::linear_rgb(0.0, 1.0, 0.0));
     }
 }
 
-fn draw_voxel_intersection(voxels: Query<&CVoxelComponent>, mut gizmos: Gizmos) {
-    for (i, ci) in voxels.iter().enumerate() {
-        for (j, cj) in voxels.iter().enumerate() {
-            if i == j {
-                continue;
-            }
-            if let Some(aabb) = ci.inner.intersection_aabb(&cj.inner) {
-                let translation = aabb.middle().coords;
-                let scale = aabb.size();
-                let mut isometry = nalgebra::Isometry3::identity();
-                isometry.translation = translation.into();
-                isometry = ci.inner.transform * isometry;
-                let transform = isometry_scale_to_transform(&isometry, &scale);
-                gizmos.cuboid(transform, Color::linear_rgb(1.0, 0.0, 0.0));
-            }
-        }
-    }
-}
+// fn draw_voxel_intersection(voxels: Query<&CVoxelComponent>, mut gizmos: Gizmos) {
+//     for (i, ci) in voxels.iter().enumerate() {
+//         for (j, cj) in voxels.iter().enumerate() {
+//             if i == j {
+//                 continue;
+//             }
+//             if let Some(aabb) = ci.inner.intersection_aabb(&cj.inner) {
+//                 let translation = aabb.middle().coords;
+//                 let scale = aabb.size();
+//                 let mut isometry = nalgebra::Isometry3::identity();
+//                 isometry.translation = translation.into();
+//                 isometry = ci.inner.transform * isometry;
+//                 let transform = isometry_scale_to_transform(&isometry, &scale);
+//                 gizmos.cuboid(transform, Color::linear_rgb(1.0, 0.0, 0.0));
+//             }
+//         }
+//     }
+// }
 
 fn voxelize_mesh(mesh: &Mesh, dx: f32) -> Option<CVoxels> {
     let mesh_attr = mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap();
@@ -100,12 +108,18 @@ fn cvoxel_surface_mesh(voxels: &CVoxels) -> Mesh {
     .with_computed_normals()
 }
 
-fn cvoxel_transform_ui(
+fn ui(
     mut voxels: Query<&mut CVoxelComponent>,
     mut contexts: EguiContexts,
     mut panorbit: Query<&mut PanOrbitCamera>,
+    settings: ResMut<AppSettings>,
 ) {
+    let settings = settings.into_inner();
     let response = egui::Window::new("Voxel Objects").show(contexts.ctx_mut(), |ui| {
+        // visualization
+        ui.checkbox(&mut settings.show_bounding_box, "Show Bounding Box");
+        
+        // transform control
         for mut cvoxel in voxels.iter_mut() {
             let transform = &mut cvoxel.inner.transform;
 
@@ -114,28 +128,32 @@ fn cvoxel_transform_ui(
             let mut euler = transform.rotation.euler_angles();
             ui.label("Euler:");
 
-            ui.add(
-                egui::DragValue::new(&mut euler.0)
-                    .prefix("roll: ")
-                    .speed(speed),
-            );
-            ui.add(
-                egui::DragValue::new(&mut euler.1)
-                    .prefix("pitch: ")
-                    .speed(speed),
-            );
-            ui.add(
-                egui::DragValue::new(&mut euler.2)
-                    .prefix("yaw: ")
-                    .speed(speed),
-            );
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::DragValue::new(&mut euler.0)
+                        .prefix("roll: ")
+                        .speed(speed),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut euler.1)
+                        .prefix("pitch: ")
+                        .speed(speed),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut euler.2)
+                        .prefix("yaw: ")
+                        .speed(speed),
+                );
+            });
             transform.rotation = UnitQuaternion::from_euler_angles(euler.0, euler.1, euler.2);
 
             let pos = &mut transform.translation.vector.data.0[0];
             ui.label("Pos:");
-            ui.add(egui::DragValue::new(&mut pos[0]).prefix("x: ").speed(speed));
-            ui.add(egui::DragValue::new(&mut pos[1]).prefix("y: ").speed(speed));
-            ui.add(egui::DragValue::new(&mut pos[2]).prefix("z: ").speed(speed));
+            ui.horizontal(|ui| {
+                ui.add(egui::DragValue::new(&mut pos[0]).prefix("x: ").speed(speed));
+                ui.add(egui::DragValue::new(&mut pos[1]).prefix("y: ").speed(speed));
+                ui.add(egui::DragValue::new(&mut pos[2]).prefix("z: ").speed(speed));
+            });
         }
     });
     let mut panorbit = panorbit.single_mut();
@@ -157,6 +175,11 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
+    // settings
+    commands.insert_resource(AppSettings {
+        show_bounding_box: true,
+    });
+
     // camera
     commands.spawn((
         Camera3dBundle {
