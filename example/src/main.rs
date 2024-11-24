@@ -8,7 +8,7 @@ use bevy::{
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin};
 use cvoxel::CVoxels;
-use nalgebra::UnitQuaternion;
+use nalgebra::{Point3, UnitQuaternion, Vector3};
 
 fn main() {
     App::new()
@@ -18,7 +18,8 @@ fn main() {
         .add_systems(Startup, setup)
         .add_systems(Update, update_from_cvoxel_transform)
         .add_systems(Update, draw_voxel_aabb)
-        // .add_systems(Update, draw_voxel_intersection)
+        .add_systems(Update, draw_intersection_aabb)
+        .add_systems(Update, draw_intersecting_voxel)
         .add_systems(Update, ui)
         .run();
 }
@@ -33,7 +34,7 @@ struct CVoxelComponent {
     inner: CVoxels,
 }
 
-fn isometry_scale_to_transform(isometry: &nalgebra::Isometry3<f32>, scale: &nalgebra::Vector3<f32>) -> Transform {
+fn isometry_scale_to_transform(isometry: &nalgebra::Isometry3<f32>, scale: &Vector3<f32>) -> Transform {
     let mut transform = Transform::IDENTITY;
     transform.translation =
         Vec3::from_array(isometry.translation.vector.data.0[0]);
@@ -63,24 +64,55 @@ fn draw_voxel_aabb(settings: Res<AppSettings>, voxels: Query<&CVoxelComponent>, 
     }
 }
 
-// fn draw_voxel_intersection(voxels: Query<&CVoxelComponent>, mut gizmos: Gizmos) {
-//     for (i, ci) in voxels.iter().enumerate() {
-//         for (j, cj) in voxels.iter().enumerate() {
-//             if i == j {
-//                 continue;
-//             }
-//             if let Some(aabb) = ci.inner.intersection_aabb(&cj.inner) {
-//                 let translation = aabb.middle().coords;
-//                 let scale = aabb.size();
-//                 let mut isometry = nalgebra::Isometry3::identity();
-//                 isometry.translation = translation.into();
-//                 isometry = ci.inner.transform * isometry;
-//                 let transform = isometry_scale_to_transform(&isometry, &scale);
-//                 gizmos.cuboid(transform, Color::linear_rgb(1.0, 0.0, 0.0));
-//             }
-//         }
-//     }
-// }
+fn draw_intersection_aabb(voxels: Query<&CVoxelComponent>, mut gizmos: Gizmos) {
+    for (i, ci) in voxels.iter().enumerate() {
+        for (j, cj) in voxels.iter().enumerate() {
+            if i == j {
+                continue;
+            }
+            if let Some(aabb) = ci.inner.intersection_aabb(&cj.inner) {
+                let translation = aabb.middle().coords;
+                let scale = aabb.size();
+                let mut isometry = nalgebra::Isometry3::identity();
+                isometry.translation = translation.into();
+                isometry = ci.inner.transform * isometry;
+                let transform = isometry_scale_to_transform(&isometry, &scale);
+                gizmos.cuboid(transform, Color::linear_rgb(1.0, 1.0, 0.0));
+            }
+        }
+    }
+}
+
+fn draw_single_voxel_in_object(index: usize, cvoxel: &CVoxels, gizmos: &mut Gizmos) {
+    let area = cvoxel.area();
+    let z = index / area;
+    let left = index % area;
+    let y = left / cvoxel.shape.x;
+    let x = left % cvoxel.shape.x;
+    let voxel_size = Vector3::new(cvoxel.dx, cvoxel.dx, cvoxel.dx);
+    let coords = Point3::new(x, y, z).cast::<f32>() * cvoxel.dx + voxel_size * 0.5 - cvoxel.size() * 0.5;
+
+    let mut isometry = nalgebra::Isometry3::identity();
+    isometry.translation = coords.into();
+    isometry = cvoxel.transform * isometry;
+    let transform = isometry_scale_to_transform(&isometry, &voxel_size);
+
+    gizmos.cuboid(transform, Color::linear_rgb(1.0, 0.0, 0.0));
+}
+
+fn draw_intersecting_voxel(voxels: Query<&CVoxelComponent>, mut gizmos: Gizmos) {
+    for (i, ci) in voxels.iter().enumerate() {
+        for (j, cj) in voxels.iter().enumerate() {
+            if i == j {
+                continue;
+            }
+            if let Some((i1, i2)) = ci.inner.intersected(&cj.inner) {
+                draw_single_voxel_in_object(i1, &ci.inner, &mut gizmos);
+                draw_single_voxel_in_object(i2, &cj.inner, &mut gizmos);
+            }
+        }
+    }
+}
 
 fn voxelize_mesh(mesh: &Mesh, dx: f32) -> Option<CVoxels> {
     let mesh_attr = mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap();
@@ -109,7 +141,7 @@ fn cvoxel_surface_mesh(voxels: &CVoxels) -> Mesh {
 }
 
 fn ui(
-    mut voxels: Query<&mut CVoxelComponent>,
+    mut voxels: Query<(&mut CVoxelComponent, &mut Visibility)>,
     mut contexts: EguiContexts,
     mut panorbit: Query<&mut PanOrbitCamera>,
     settings: ResMut<AppSettings>,
@@ -119,11 +151,20 @@ fn ui(
         // visualization
         ui.checkbox(&mut settings.show_bounding_box, "Show Bounding Box");
         
-        // transform control
-        for mut cvoxel in voxels.iter_mut() {
+        // controls
+        for (i, (mut cvoxel, visibility)) in voxels.iter_mut().enumerate() {
             let transform = &mut cvoxel.inner.transform;
 
             let speed = 0.01;
+
+            let visibility = visibility.into_inner();
+            egui::ComboBox::from_id_salt(i)
+                .selected_text(format!("{:?}", visibility))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(visibility, Visibility::Inherited, "Inherited");
+                    ui.selectable_value(visibility, Visibility::Hidden, "Hidden");
+                    ui.selectable_value(visibility, Visibility::Visible, "Visible");
+                });
 
             let mut euler = transform.rotation.euler_angles();
             ui.label("Euler:");
@@ -154,6 +195,8 @@ fn ui(
                 ui.add(egui::DragValue::new(&mut pos[1]).prefix("y: ").speed(speed));
                 ui.add(egui::DragValue::new(&mut pos[2]).prefix("z: ").speed(speed));
             });
+
+            ui.separator();
         }
     });
     let mut panorbit = panorbit.single_mut();
