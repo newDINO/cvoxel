@@ -1,12 +1,3 @@
 [workspace]
-members = ["example"]
-
-[package]
-name = "cvoxel"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-nalgebra = "*"
-num_enum = "*"
-num-traits = "*"
+members = ["example", "cvoxel", "pvoxel"]
+resolver = "2"
