@@ -26,7 +26,7 @@ fn main() {
 
 #[derive(Resource)]
 struct AppSettings {
-    show_bounding_box: bool
+    show_bounding_box: bool,
 }
 
 #[derive(Component)]
@@ -34,15 +34,15 @@ struct CVoxelComponent {
     inner: CVoxels,
 }
 
-fn isometry_scale_to_transform(isometry: &nalgebra::Isometry3<f32>, scale: &Vector3<f32>) -> Transform {
+fn isometry_scale_to_transform(
+    isometry: &nalgebra::Isometry3<f32>,
+    scale: &Vector3<f32>,
+) -> Transform {
     let mut transform = Transform::IDENTITY;
-    transform.translation =
-        Vec3::from_array(isometry.translation.vector.data.0[0]);
-    transform.rotation =
-        Quat::from_array(isometry.rotation.quaternion().coords.data.0[0]);
+    transform.translation = Vec3::from_array(isometry.translation.vector.data.0[0]);
+    transform.rotation = Quat::from_array(isometry.rotation.quaternion().coords.data.0[0]);
     transform.scale = Vec3::from_array(scale.data.0[0]);
     transform
-
 }
 
 fn update_from_cvoxel_transform(mut query: Query<(&CVoxelComponent, &mut Transform)>) {
@@ -54,12 +54,17 @@ fn update_from_cvoxel_transform(mut query: Query<(&CVoxelComponent, &mut Transfo
     }
 }
 
-fn draw_voxel_aabb(settings: Res<AppSettings>, voxels: Query<&CVoxelComponent>, mut gizmos: Gizmos) {
+fn draw_voxel_aabb(
+    settings: Res<AppSettings>,
+    voxels: Query<&CVoxelComponent>,
+    mut gizmos: Gizmos,
+) {
     if !settings.show_bounding_box {
         return;
     }
     for cvoxels in voxels.iter() {
-        let transform = isometry_scale_to_transform(&cvoxels.inner.transform, &cvoxels.inner.size());
+        let transform =
+            isometry_scale_to_transform(&cvoxels.inner.transform, &cvoxels.inner.size());
         gizmos.cuboid(transform, Color::linear_rgb(0.0, 1.0, 0.0));
     }
 }
@@ -90,7 +95,8 @@ fn draw_single_voxel_in_object(index: usize, cvoxel: &CVoxels, gizmos: &mut Gizm
     let y = left / cvoxel.shape.x;
     let x = left % cvoxel.shape.x;
     let voxel_size = Vector3::new(cvoxel.dx, cvoxel.dx, cvoxel.dx);
-    let coords = Point3::new(x, y, z).cast::<f32>() * cvoxel.dx + voxel_size * 0.5 - cvoxel.size() * 0.5;
+    let coords =
+        Point3::new(x, y, z).cast::<f32>() * cvoxel.dx + voxel_size * 0.5 - cvoxel.size() * 0.5;
 
     let mut isometry = nalgebra::Isometry3::identity();
     isometry.translation = coords.into();
@@ -150,7 +156,7 @@ fn ui(
     let response = egui::Window::new("Voxel Objects").show(contexts.ctx_mut(), |ui| {
         // visualization
         ui.checkbox(&mut settings.show_bounding_box, "Show Bounding Box");
-        
+
         // controls
         for (i, (mut cvoxel, visibility)) in voxels.iter_mut().enumerate() {
             let transform = &mut cvoxel.inner.transform;

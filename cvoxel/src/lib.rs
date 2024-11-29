@@ -1,4 +1,4 @@
-use nalgebra::{vector, Isometry3, Point2, Point3, Translation, UnitQuaternion, Vector2, Vector3};
+use nalgebra::{Isometry3, Point2, Point3, Translation, UnitQuaternion, Vector2, Vector3};
 use num_enum::TryFromPrimitive;
 use std::ops::{Add, BitAnd, BitOr, Div, Mul, Sub};
 
@@ -153,7 +153,7 @@ impl Add<Vector3<f32>> for Aabb {
     fn add(self, rhs: Vector3<f32>) -> Self::Output {
         Aabb {
             min: self.min + rhs,
-            max: self.max + rhs
+            max: self.max + rhs,
         }
     }
 }
@@ -162,7 +162,7 @@ impl Mul<f32> for Aabb {
     fn mul(self, rhs: f32) -> Self::Output {
         Aabb {
             min: self.min * rhs,
-            max: self.max * rhs
+            max: self.max * rhs,
         }
     }
 }
@@ -178,7 +178,7 @@ impl Sub<Vector3<f32>> for Aabb {
     fn sub(self, rhs: Vector3<f32>) -> Self::Output {
         Aabb {
             min: self.min - rhs,
-            max: self.max - rhs
+            max: self.max - rhs,
         }
     }
 }
@@ -217,7 +217,7 @@ impl CVoxels {
         let half_extents = 0.5 * self.size();
         Aabb {
             min: Point3::from(-half_extents),
-            max: Point3::from(half_extents)
+            max: Point3::from(half_extents),
         }
     }
 
@@ -316,11 +316,11 @@ impl CVoxels {
             return Self::default();
         };
         let size = total_aabb.size();
-        let shape = vector![
+        let shape = Vector3::new(
             (size.x / dx).ceil() as usize,
             (size.y / dx).ceil() as usize,
             (size.z / dx).ceil() as usize,
-        ];
+        );
         let transform = Isometry3 {
             translation: Translation::from(total_aabb.middle().coords),
             rotation: UnitQuaternion::identity(),
@@ -390,12 +390,10 @@ impl CVoxels {
             (1, 2),
             (2, 3),
             (3, 0),
-
             (0, 4),
             (1, 5),
             (2, 6),
             (3, 7),
-
             (4, 5),
             (5, 6),
             (6, 7),
@@ -446,7 +444,8 @@ impl CVoxels {
                 continue;
             }
             if max > self_aabb.max.x {
-                let crossing = lines[i][min_i].lerp(&lines[i][max_i], (self_aabb.max.x - min) / (max - min));
+                let crossing =
+                    lines[i][min_i].lerp(&lines[i][max_i], (self_aabb.max.x - min) / (max - min));
                 lines[i][max_i] = crossing;
                 crossings.push(Point2::new(crossing.y, crossing.z));
             }
@@ -471,7 +470,8 @@ impl CVoxels {
                 continue;
             }
             if min < self_aabb.min.x {
-                let crossing = lines[i][min_i].lerp(&lines[i][max_i], (self_aabb.min.x - min) / (max - min));
+                let crossing =
+                    lines[i][min_i].lerp(&lines[i][max_i], (self_aabb.min.x - min) / (max - min));
                 lines[i][min_i] = crossing;
                 crossings.push(Point2::new(crossing.y, crossing.z));
             }
@@ -496,7 +496,8 @@ impl CVoxels {
                 continue;
             }
             if max > self_aabb.max.y {
-                let crossing = lines[i][min_i].lerp(&lines[i][max_i], (self_aabb.max.y - min) / (max - min));
+                let crossing =
+                    lines[i][min_i].lerp(&lines[i][max_i], (self_aabb.max.y - min) / (max - min));
                 lines[i][max_i] = crossing;
                 crossings.push(Point2::new(crossing.x, crossing.z));
             }
@@ -521,7 +522,8 @@ impl CVoxels {
                 continue;
             }
             if min < self_aabb.min.y {
-                let crossing = lines[i][min_i].lerp(&lines[i][max_i], (self_aabb.min.y - min) / (max - min));
+                let crossing =
+                    lines[i][min_i].lerp(&lines[i][max_i], (self_aabb.min.y - min) / (max - min));
                 lines[i][min_i] = crossing;
                 crossings.push(Point2::new(crossing.x, crossing.z));
             }
@@ -547,7 +549,8 @@ impl CVoxels {
                 continue;
             }
             if max > self_aabb.max.z {
-                let crossing = lines[i][min_i].lerp(&lines[i][max_i], (self_aabb.max.z - min) / (max - min));
+                let crossing =
+                    lines[i][min_i].lerp(&lines[i][max_i], (self_aabb.max.z - min) / (max - min));
                 lines[i][max_i] = crossing;
                 crossings.push(Point2::new(crossing.x, crossing.y));
             }
@@ -572,7 +575,8 @@ impl CVoxels {
                 continue;
             }
             if min < self_aabb.min.z {
-                let crossing = lines[i][min_i].lerp(&lines[i][max_i], (self_aabb.min.z - min) / (max - min));
+                let crossing =
+                    lines[i][min_i].lerp(&lines[i][max_i], (self_aabb.min.z - min) / (max - min));
                 lines[i][min_i] = crossing;
                 crossings.push(Point2::new(crossing.x, crossing.y));
             }
@@ -601,9 +605,7 @@ impl CVoxels {
         }
 
         if min != MAX_POINT {
-            Some(Aabb {
-                min, max
-            })
+            Some(Aabb { min, max })
         } else {
             None
         }
@@ -628,7 +630,11 @@ impl CVoxels {
         }
         #[inline]
         fn component_ceil(p: &Point3<f32>) -> Point3<usize> {
-            Point3::new(p.x.ceil() as usize, p.y.ceil() as usize, p.z.ceil() as usize)
+            Point3::new(
+                p.x.ceil() as usize,
+                p.y.ceil() as usize,
+                p.z.ceil() as usize,
+            )
         }
 
         let start = component_floor(&intersection_part.min);
@@ -640,14 +646,23 @@ impl CVoxels {
             if dimensionless < -0.5 {
                 Range { start: 0, end: 0 }
             } else if dimensionless < 0.5 {
-                Range { start: 0, end: 1}
+                Range { start: 0, end: 1 }
             } else if dimensionless < len as f32 - 0.5 {
                 let start = dimensionless.round() as usize - 1;
-                Range { start, end: start + 2 }
+                Range {
+                    start,
+                    end: start + 2,
+                }
             } else if dimensionless < len as f32 + 0.5 {
-                Range { start: len - 1, end: len}
+                Range {
+                    start: len - 1,
+                    end: len,
+                }
             } else {
-                Range { start: len, end: len }
+                Range {
+                    start: len,
+                    end: len,
+                }
             }
         }
         #[inline]
@@ -673,15 +688,15 @@ impl CVoxels {
                 let y = (j as f32 + 0.5) * self.dx - half_size.y;
                 for i in start.x..end.x {
                     let index = yz_base + i;
-                    let x = (i as f32 + 0.5) * self.dx - half_size.x;
                     if self.data[index] == CVoxelType::Air {
                         continue;
                     }
+                    let x = (i as f32 + 0.5) * self.dx - half_size.x;
                     let coord = Point3::new(x, y, z);
                     let coord_in_rhs = to_rhs_transform * coord;
                     let unit_coord = (coord_in_rhs + rhs_half_size) * rhs_inv_dx;
                     let [range_x, range_y, range_z] = axis_ranges(&unit_coord, &rhs.shape);
-                    
+
                     for rk in range_z {
                         let rz_base = rk * rhs_area;
                         for rj in range_y.clone() {
