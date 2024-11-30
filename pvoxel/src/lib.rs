@@ -1,8 +1,9 @@
 use std::ops::{Deref, DerefMut};
 
 use cvoxel::{CVoxelType, CVoxels};
-use nalgebra::{Isometry3, Matrix3, Point3, Vector3};
+use nalgebra::{Matrix3, Point3, UnitQuaternion, Vector3};
 
+#[derive(PartialEq, Eq, Clone, Copy)]
 pub enum RigidType {
     Dynamic,
     Fixed,
@@ -12,10 +13,12 @@ pub struct PVoxels {
     pub cvoxels: CVoxels,
     /// local center of mass.
     pub local_cm: Point3<f32>,
-    pub mass: f32,
+    pub inv_mass: f32,
     /// local moment of inertia.
-    pub local_inertia: Matrix3<f32>,
+    pub inv_local_inertia: Matrix3<f32>,
     pub ty: RigidType,
+    pub vel: Vector3<f32>,
+    pub ang_vel: Vector3<f32>,
 }
 
 impl Deref for PVoxels {
@@ -36,9 +39,11 @@ impl PVoxels {
         let mut temp = Self {
             cvoxels,
             local_cm: Point3::new(0.0, 0.0, 0.0),
-            mass: 0.0,
-            local_inertia: Matrix3::zeros(),
+            inv_mass: 0.0,
+            inv_local_inertia: Matrix3::zeros(),
             ty,
+            vel: Vector3::zeros(),
+            ang_vel: Vector3::zeros(),
         };
         temp.recal_local_cm();
         temp.recal_mass_and_inertia(density);
@@ -47,18 +52,15 @@ impl PVoxels {
 
     /// recalculate local_cm
     pub fn recal_local_cm(&mut self) {
-        let area = self.area();
-        let half_size = self.size() * 0.5;
-
         let mut result = Point3::new(0.0, 0.0, 0.0);
         let mut counts = 0.0;
 
         for k in 0..self.shape.z {
-            let k_base = k * area;
-            let z = (k as f32 + 0.5) * self.dx - half_size.z;
+            let k_base = k * self.area;
+            let z = (k as f32 + 0.5) * self.dx - self.half_size.z;
             for j in 0..self.shape.y {
                 let jk_base = k_base + j * self.shape.x;
-                let y = (j as f32 + 0.5) * self.dx - half_size.y;
+                let y = (j as f32 + 0.5) * self.dx - self.half_size.y;
                 for i in 0..self.shape.x {
                     let index = jk_base + i;
                     if self.data[index] == CVoxelType::Air {
@@ -66,7 +68,7 @@ impl PVoxels {
                     }
                     counts += 1.0;
 
-                    let x = (i as f32 + 0.5) * self.dx - half_size.x;
+                    let x = (i as f32 + 0.5) * self.dx - self.half_size.x;
                     result += Vector3::new(x, y, z);
                 }
             }
@@ -75,26 +77,23 @@ impl PVoxels {
         self.local_cm = result;
     }
 
-    /// recalculate mass and local_inertia
-    pub fn recal_mass_and_inertia(&mut self, density: f32) {
+    /// recalculate inv_mass and inv_local_inertia
+    pub fn recal_mass_and_inertia(&mut self, density: f32) -> Option<()> {
         let mut inertia = Matrix3::zeros();
         let mut mass = 0.0;
 
-        let area = self.area();
-        let half_size = self.size() * 0.5;
-
         for k in 0..self.shape.z {
-            let k_base = k * area;
-            let z_to_cm = (k as f32 + 0.5) * self.dx - half_size.z - self.local_cm.z;
+            let k_base = k * self.area;
+            let z_to_cm = (k as f32 + 0.5) * self.dx - self.half_size.z - self.local_cm.z;
             for j in 0..self.shape.y {
                 let jk_base = k_base + j * self.shape.x;
-                let y_to_cm = (j as f32 + 0.5) * self.dx - half_size.y - self.local_cm.y;
+                let y_to_cm = (j as f32 + 0.5) * self.dx - self.half_size.y - self.local_cm.y;
                 for i in 0..self.shape.x {
                     let index = jk_base + i;
                     if self.data[index] == CVoxelType::Air {
                         continue;
                     }
-                    let x_to_cm = (i as f32 + 0.5) * self.dx - half_size.x - self.local_cm.x;
+                    let x_to_cm = (i as f32 + 0.5) * self.dx - self.half_size.x - self.local_cm.x;
 
                     let x2 = x_to_cm * x_to_cm;
                     let y2 = y_to_cm * y_to_cm;
@@ -122,21 +121,21 @@ impl PVoxels {
         mass *= unit_m;
         inertia *= unit_m;
 
-        self.mass = mass;
-        self.local_inertia = inertia;
+        self.inv_mass = 1.0 / mass;
+        self.inv_local_inertia = inertia.try_inverse()?;
+        Some(())
     }
 
-    pub fn interact_with(&mut self, rhs: &mut PVoxels) {
-        let intersection_aabb = if let Some(aabb) = self.intersection_aabb(rhs) {
-            aabb
-        } else {
-            return;
-        };
+    pub fn step_dt(&mut self, dt: f32) {
+        let rot = UnitQuaternion::from_scaled_axis(self.ang_vel * dt);
+        let trans = self.vel * dt;
+        self.transform.rotation *= rot;
+        self.transform.translation.vector += trans;
+    }
 
-        let half_size = self.size() * 0.5;
 
-        let intersection_part = (intersection_aabb + half_size) / self.dx;
-
+    pub fn gen_contacts(&self, rhs: &PVoxels, contacts: &mut Vec<Contact>) {
+        // 1. utilities
         #[inline]
         fn component_floor(p: &Point3<f32>) -> Point3<usize> {
             Point3::new(p.x as usize, p.y as usize, p.z as usize)
@@ -149,9 +148,6 @@ impl PVoxels {
                 p.z.ceil() as usize,
             )
         }
-
-        let start = component_floor(&intersection_part.min);
-        let end = component_ceil(&intersection_part.max).inf(&self.shape.into());
 
         use std::ops::Range;
         #[inline]
@@ -187,72 +183,54 @@ impl PVoxels {
             ]
         }
 
-        let mut to_rhs_transform = rhs.transform.inverse() * self.transform;
-        let rhs_half_size = rhs.size() * 0.5;
-        let rhs_inv_dx = 1.0 / rhs.dx;
-        let rhs_area = rhs.area();
-
-        #[inline]
-        fn resolve_dynamic_fixed(
-            voxel1: &mut PVoxels,
-            voxel2: &mut PVoxels,
-            p1_in1: &Point3<f32>,
-            p2_in2: &Point3<f32>,
-        ) {
-            
-        }
-
-        #[inline]
-        fn self_edge_f(rindex: usize, rhs: &mut PVoxels) {
-            if rhs.data[rindex] == CVoxelType::Edge {
-
-            }
-        }
-
-        #[inline]
-        fn self_corner_f(rindex: usize, rhs: &mut PVoxels) {
-            if rhs.data[rindex] == CVoxelType::Face
-                || rhs.data[rindex] == CVoxelType::Edge
-                || rhs.data[rindex] == CVoxelType::Corner
-            {
-            }
-        }
-
-        let mut for_every_self_branch = |z: f32, y: f32, i: usize, branch_f: fn(usize, &mut PVoxels)| {
-            let x = (i as f32 + 0.5) * self.dx - half_size.x;
-            let coord = Point3::new(x, y, z);
-            let coord_in_rhs = to_rhs_transform * coord;
-            let unit_coord = (coord_in_rhs + rhs_half_size) * rhs_inv_dx;
-            let [range_x, range_y, range_z] = axis_ranges(&unit_coord, &rhs.shape);
-
-            for rk in range_z {
-                let rz_base = rk * rhs_area;
-                for rj in range_y.clone() {
-                    let rzy_base = rz_base + rj * rhs.shape.x;
-                    for ri in range_x.clone() {
-                        let rindex = rzy_base + ri;
-                        branch_f(rindex, rhs);
-                    }
-                }
-            }
+        // 2. process
+        let intersection_aabb = if let Some(aabb) = self.intersection_aabb(rhs) {
+            aabb
+        } else {
+            return;
         };
+        let intersection_part = (intersection_aabb + self.half_size) / self.dx;
+        let start = component_floor(&intersection_part.min);
+        let end = component_ceil(&intersection_part.max).inf(&self.shape.into());
 
-        let area = self.area();
+        let to_rhs_transform = rhs.transform.inverse() * self.transform;
+        let rhs_inv_dx = 1.0 / rhs.dx;
+
         for k in start.z..end.z {
-            let z_base = k * area;
-            let z = (k as f32 + 0.5) * self.dx - half_size.z;
+            let z_base = k * self.area;
+            let z = (k as f32 + 0.5) * self.dx - self.half_size.z;
             for j in start.y..end.y {
                 let yz_base = z_base + j * self.shape.x;
-                let y = (j as f32 + 0.5) * self.dx - half_size.y;
+                let y = (j as f32 + 0.5) * self.dx - self.half_size.y;
                 for i in start.x..end.x {
                     let index = yz_base + i;
-                    if self.data[index] == CVoxelType::Edge {
-                        for_every_self_branch(z, y, i, self_edge_f);
-                    } else if self.data[index] == CVoxelType::Corner {
-                        for_every_self_branch(z, y, i, self_corner_f);
+                    if self.data[index] == CVoxelType::Air {
+                        continue;
+                    }
+                    let x = (i as f32 + 0.5) * self.dx - self.half_size.x;
+                    let coord = Point3::new(x, y, z);
+                    let coord_in_rhs = to_rhs_transform * coord;
+                    let unit_coord = (coord_in_rhs + rhs.half_size) * rhs_inv_dx;
+                    let [range_x, range_y, range_z] = axis_ranges(&unit_coord, &rhs.shape);
+
+                    for rk in range_z {
+                        let rz_base = rk * rhs.area;
+                        for rj in range_y.clone() {
+                            let rzy_base = rz_base + rj * rhs.shape.x;
+                            for ri in range_x.clone() {
+                                let rindex = rzy_base + ri;
+                                if rhs.data[rindex] != CVoxelType::Air {
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
     }
+}
+
+pub struct Contact {
+    pub point: Point3<f32>,
+    pub normal: Vector3<f32>,
 }

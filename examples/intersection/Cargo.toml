@@ -1,10 +1,10 @@
 [package]
-name = "example"
+name = "intersection"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-cvoxel = { path = "../cvoxel" }
+cvoxel = { path = "../../cvoxel" }
 bevy = { version = "*", features = ["dynamic_linking"] }
 bytemuck = "*"
 bevy_egui = "*"

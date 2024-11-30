@@ -196,16 +196,20 @@ pub enum CVoxelType {
 #[derive(Default)]
 pub struct CVoxels {
     pub shape: Vector3<usize>,
+    /// shape.x * shape.y
+    pub area: usize,
+    pub dx: f32,
+    /// shape * dx * 0.5
+    pub half_size: Vector3<f32>,
     /// The position part is the center of the voxel object.
     pub transform: Isometry3<f32>,
-    pub dx: f32,
     pub data: Vec<CVoxelType>,
 }
 impl CVoxels {
     /// Aabb in world space
     pub fn aabb(&self) -> Aabb {
         let ws_half_extents =
-            self.transform.rotation.to_rotation_matrix().matrix().abs() * 0.5 * self.size();
+            self.transform.rotation.to_rotation_matrix().matrix().abs() * self.half_size;
         Aabb {
             min: (self.transform.translation.vector - ws_half_extents).into(),
             max: (self.transform.translation.vector + ws_half_extents).into(),
@@ -214,28 +218,34 @@ impl CVoxels {
 
     /// Aabb in local space
     pub fn local_aabb(&self) -> Aabb {
-        let half_extents = 0.5 * self.size();
         Aabb {
-            min: Point3::from(-half_extents),
-            max: Point3::from(half_extents),
+            min: Point3::from(-self.half_size),
+            max: Point3::from(self.half_size),
         }
     }
 
-    /// self.shape.x * self.shape.y
-    pub fn area(&self) -> usize {
-        self.shape.x * self.shape.y
+    pub fn get_x_offset(&self, index: usize, x: usize, offset: isize) -> CVoxelType {
+        let x_after_offset = (x as isize + offset) as usize;
+        if x_after_offset == 0 || x_after_offset + 1 >= self.shape.x {
+            CVoxelType::Air
+        } else {
+            let offset_index = (index as isize + offset) as usize;
+            self.data[offset_index]
+        }
     }
 
-    /// self.shape.cast::<f32>() * self.dx
-    pub fn size(&self) -> Vector3<f32> {
-        self.shape.cast::<f32>() * self.dx
+    pub fn xneg_neighbor(&self, index: usize, x: usize) -> CVoxelType {
+        if x == 0 {
+            CVoxelType::Air
+        } else {
+            self.data[index - 1]
+        }
     }
 
     /// Regenerate VoxelCType.
     pub fn regenerate_type(&mut self) {
-        let area = self.area();
         for k in 0..self.shape.z {
-            let k_part = k * area;
+            let k_part = k * self.area;
             for j in 0..self.shape.y {
                 let j_part = j * self.shape.x;
                 for i in 0..self.shape.x {
@@ -249,8 +259,8 @@ impl CVoxels {
 
                     if k == 0
                         || k == self.shape.z - 1
-                        || self.data[coord - area] == CVoxelType::Air
-                        || self.data[coord + area] == CVoxelType::Air
+                        || self.data[coord - self.area] == CVoxelType::Air
+                        || self.data[coord + self.area] == CVoxelType::Air
                     {
                         air_axis_cound += 1;
                     };
@@ -363,6 +373,8 @@ impl CVoxels {
             transform,
             dx,
             data,
+            area: shape.x * shape.y,
+            half_size: shape.cast::<f32>() * 0.5 * dx,
         };
         cvoxels.regenerate_type();
 
@@ -380,7 +392,7 @@ impl CVoxels {
             Point3::new(0.5, 0.5, 0.5),
             Point3::new(-0.5, 0.5, 0.5),
         ];
-        let size = rhs.size();
+        let size = rhs.half_size * 2.0;
         let transform = self.transform.inverse() * rhs.transform;
         for vertex in &mut vertices {
             *vertex = transform * Point3::from(vertex.coords.component_mul(&size));
@@ -620,9 +632,7 @@ impl CVoxels {
             return None;
         };
 
-        let half_size = self.size() * 0.5;
-
-        let intersection_part = (intersection_aabb + half_size) / self.dx;
+        let intersection_part = (intersection_aabb + self.half_size) / self.dx;
 
         #[inline]
         fn component_floor(p: &Point3<f32>) -> Point3<usize> {
@@ -675,30 +685,27 @@ impl CVoxels {
         }
 
         let to_rhs_transform = rhs.transform.inverse() * self.transform;
-        let rhs_half_size = rhs.size() * 0.5;
         let rhs_inv_dx = 1.0 / rhs.dx;
-        let rhs_area = rhs.area();
 
-        let area = self.area();
         for k in start.z..end.z {
-            let z_base = k * area;
-            let z = (k as f32 + 0.5) * self.dx - half_size.z;
+            let z_base = k * self.area;
+            let z = (k as f32 + 0.5) * self.dx - self.half_size.z;
             for j in start.y..end.y {
                 let yz_base = z_base + j * self.shape.x;
-                let y = (j as f32 + 0.5) * self.dx - half_size.y;
+                let y = (j as f32 + 0.5) * self.dx - self.half_size.y;
                 for i in start.x..end.x {
                     let index = yz_base + i;
                     if self.data[index] == CVoxelType::Air {
                         continue;
                     }
-                    let x = (i as f32 + 0.5) * self.dx - half_size.x;
+                    let x = (i as f32 + 0.5) * self.dx - self.half_size.x;
                     let coord = Point3::new(x, y, z);
                     let coord_in_rhs = to_rhs_transform * coord;
-                    let unit_coord = (coord_in_rhs + rhs_half_size) * rhs_inv_dx;
+                    let unit_coord = (coord_in_rhs + rhs.half_size) * rhs_inv_dx;
                     let [range_x, range_y, range_z] = axis_ranges(&unit_coord, &rhs.shape);
 
                     for rk in range_z {
-                        let rz_base = rk * rhs_area;
+                        let rz_base = rk * rhs.area;
                         for rj in range_y.clone() {
                             let rzy_base = rz_base + rj * rhs.shape.x;
                             for ri in range_x.clone() {

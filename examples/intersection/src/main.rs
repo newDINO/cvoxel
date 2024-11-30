@@ -64,7 +64,7 @@ fn draw_voxel_aabb(
     }
     for cvoxels in voxels.iter() {
         let transform =
-            isometry_scale_to_transform(&cvoxels.inner.transform, &cvoxels.inner.size());
+            isometry_scale_to_transform(&cvoxels.inner.transform, &(cvoxels.inner.half_size * 2.0));
         gizmos.cuboid(transform, Color::linear_rgb(0.0, 1.0, 0.0));
     }
 }
@@ -89,14 +89,13 @@ fn draw_intersection_aabb(voxels: Query<&CVoxelComponent>, mut gizmos: Gizmos) {
 }
 
 fn draw_single_voxel_in_object(index: usize, cvoxel: &CVoxels, gizmos: &mut Gizmos) {
-    let area = cvoxel.area();
-    let z = index / area;
-    let left = index % area;
+    let z = index / cvoxel.area;
+    let left = index % cvoxel.area;
     let y = left / cvoxel.shape.x;
     let x = left % cvoxel.shape.x;
     let voxel_size = Vector3::new(cvoxel.dx, cvoxel.dx, cvoxel.dx);
     let coords =
-        Point3::new(x, y, z).cast::<f32>() * cvoxel.dx + voxel_size * 0.5 - cvoxel.size() * 0.5;
+        Point3::new(x, y, z).cast::<f32>() * cvoxel.dx + voxel_size * 0.5 - cvoxel.half_size;
 
     let mut isometry = nalgebra::Isometry3::identity();
     isometry.translation = coords.into();
@@ -137,12 +136,13 @@ fn voxelize_mesh(mesh: &Mesh, dx: f32) -> Option<CVoxels> {
 }
 
 fn cvoxel_surface_mesh(voxels: &CVoxels) -> Mesh {
-    let surface_vertices = voxels.surface_mesh();
+    let surface_mesh = voxels.surface_mesh();
     Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::default(),
     )
-    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, surface_vertices)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, surface_mesh.position)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, surface_mesh.color)
     .with_computed_normals()
 }
 

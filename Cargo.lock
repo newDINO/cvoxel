@@ -1874,18 +1874,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "example"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "bevy_egui",
- "bevy_panorbit_camera",
- "bytemuck",
- "cvoxel",
- "nalgebra",
-]
-
-[[package]]
 name = "fastrand"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2468,6 +2456,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e05c02b5e89bff3b946cedeca278abc628fe811e604f027c45a8aa3cf793d0eb"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "intersection"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy_egui",
+ "bevy_panorbit_camera",
+ "bytemuck",
+ "cvoxel",
+ "nalgebra",
 ]
 
 [[package]]
@@ -3328,6 +3328,17 @@ dependencies = [
  "indexmap",
  "serde",
  "serde_derive",
+]
+
+[[package]]
+name = "physics"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy_panorbit_camera",
+ "cvoxel",
+ "nalgebra",
+ "pvoxel",
 ]
 
 [[package]]

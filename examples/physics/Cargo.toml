@@ -1,0 +1,11 @@
+[package]
+name = "physics"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bevy = { version = "*", features = ["dynamic_linking"] }
+bevy_panorbit_camera = "*"
+pvoxel = { path = "../../pvoxel" }
+cvoxel = { path = "../../cvoxel" }
+nalgebra = "*"
