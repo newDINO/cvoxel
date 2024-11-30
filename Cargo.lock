@@ -3335,6 +3335,7 @@ name = "physics"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "bevy_egui",
  "bevy_panorbit_camera",
  "cvoxel",
  "nalgebra",

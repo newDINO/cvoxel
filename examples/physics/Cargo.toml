@@ -9,3 +9,4 @@ bevy_panorbit_camera = "*"
 pvoxel = { path = "../../pvoxel" }
 cvoxel = { path = "../../cvoxel" }
 nalgebra = "*"
+bevy_egui = "*"

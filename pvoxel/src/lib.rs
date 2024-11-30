@@ -132,9 +132,109 @@ impl PVoxels {
         self.transform.rotation *= rot;
         self.transform.translation.vector += trans;
     }
+}
 
+#[derive(Clone, Copy)]
+pub struct Contact {
+    pub point: Point3<f32>,
+    pub normal: Vector3<f32>,
+    pub i1: usize,
+    pub i2: usize,
+}
 
-    pub fn gen_contacts(&self, rhs: &PVoxels, contacts: &mut Vec<Contact>) {
+pub struct PhysicsWorld {
+    pub objects: Vec<PVoxels>,
+    pub contacts: Vec<Contact>,
+}
+
+impl PhysicsWorld {
+    pub fn step_dt(&mut self, dt: f32) {
+        for obj in &mut self.objects {
+            if obj.ty == RigidType::Fixed {
+                continue;
+            }
+            obj.step_dt(dt);
+        }
+    }
+
+    pub fn resolve_contacts(&mut self, iters: usize) {
+        for _ in 0..iters {
+            for i in 0..self.contacts.len() {
+                self.resolve_one_contact(i);
+            }
+        }
+        self.contacts.clear();
+    }
+
+    /// This will apply the impulse after it is solved.
+    pub fn resolve_one_contact(&mut self, index: usize) {
+        let contact = &self.contacts[index];
+        let (obj1, obj2) = if contact.i1 < contact.i2 {
+            let (part1, part2) = self.objects.split_at_mut(contact.i2);
+            (&mut part1[contact.i1], &mut part2[0])
+        } else {
+            let (part1, part2) = self.objects.split_at_mut(contact.i1);
+            (&mut part2[0], &mut part1[contact.i2])
+        };
+
+        fn solve_dynamic_fixed(dynamic: &mut PVoxels, contact: &Contact) {
+            let cm = dynamic.transform * dynamic.local_cm;
+            let r = contact.point - cm;
+
+            let vp = dynamic.vel + dynamic.ang_vel.cross(&r);
+            let vpn = vp.dot(&contact.normal);
+            if vpn > 0.0 {
+                return;
+            }
+            let dv = -2.0 * 0.7 * vpn;
+
+            let rot = dynamic.transform.rotation.to_rotation_matrix();
+            let inv_inertia = rot * dynamic.inv_local_inertia * rot.transpose();
+
+            let cross_n = r.cross(&contact.normal);
+
+            let m_eff_n = 1.0 / (dynamic.inv_mass + cross_n.dot(&(inv_inertia * cross_n)));
+            let lambda_n = dv * m_eff_n;
+
+            // friction
+            let t = contact.normal.cross(&(vp.cross(&contact.normal))).normalize();
+            let vpt = vp.dot(&t);
+            let cross_t = r.cross(&t);
+            let m_eff_t = 1.0 / (dynamic.inv_mass + cross_t.dot(&(inv_inertia * cross_t)));
+            let lambda_t = (lambda_n * 0.7).min(-vpt * m_eff_t);
+
+            // apply impulse
+            let impluse = lambda_n * contact.normal + lambda_t * t;
+            dynamic.ang_vel += inv_inertia * r.cross(&impluse);
+            dynamic.vel += dynamic.inv_mass * impluse;
+        }
+
+        if obj1.ty == RigidType::Dynamic {
+            if obj2.ty == RigidType::Fixed {
+                solve_dynamic_fixed(obj1, contact);
+            }
+        } else if obj1.ty == RigidType::Fixed {
+            if obj2.ty == RigidType::Dynamic {
+                // normal must point from the fixed to the dynamic for solve_dynamic_fixed()
+                let mut reverted_contact = contact.clone();
+                reverted_contact.normal = -reverted_contact.normal;
+                solve_dynamic_fixed(obj2, contact);
+            }
+        }
+    }
+
+    pub fn gen_contacts(&mut self) {
+        for i1 in 0..self.objects.len() {
+            for i2 in 0..self.objects.len() {
+                if i1 == i2 {
+                    continue;
+                }
+                self.gen_contact_for(i1, i2);
+            }
+        }
+    }
+
+    pub fn gen_contact_for(&mut self, i1: usize, i2: usize) {
         // 1. utilities
         #[inline]
         fn component_floor(p: &Point3<f32>) -> Point3<usize> {
@@ -183,43 +283,99 @@ impl PVoxels {
             ]
         }
 
+        #[inline]
+        fn contact_between(
+            voxels1: &PVoxels,
+            voxels2: &PVoxels,
+            p1_in1: &Point3<f32>,
+            p2_in2: &Point3<f32>,
+            contacts: &mut Vec<Contact>,
+            i1: usize,
+            i2: usize,
+        ) {
+            let p1 = voxels1.transform * p1_in1;
+            let p2 = voxels2.transform * p2_in2;
+            let n = p1 - p2;
+            let dist = n.magnitude();
+            let overlap = (voxels1.dx + voxels2.dx) * 0.5 - dist;
+            if overlap < 0.0 {
+                return;
+            }
+            let n = 1.0 / dist * n;
+            let point = p1.lerp(&p2, 0.5);
+            contacts.push(Contact { point, normal: n , i1, i2})
+        }
+
         // 2. process
-        let intersection_aabb = if let Some(aabb) = self.intersection_aabb(rhs) {
+        let obj1 = &self.objects[i1];
+        let obj2 = &self.objects[i2];
+
+        let intersection_aabb = if let Some(aabb) = obj1.intersection_aabb(obj2) {
             aabb
         } else {
             return;
         };
-        let intersection_part = (intersection_aabb + self.half_size) / self.dx;
+        let intersection_part = (intersection_aabb + obj1.half_size) / obj1.dx;
         let start = component_floor(&intersection_part.min);
-        let end = component_ceil(&intersection_part.max).inf(&self.shape.into());
+        let end = component_ceil(&intersection_part.max).inf(&obj1.shape.into());
 
-        let to_rhs_transform = rhs.transform.inverse() * self.transform;
-        let rhs_inv_dx = 1.0 / rhs.dx;
+        let to_obj2_transform = obj2.transform.inverse() * obj1.transform;
+        let obj2_inv_dx = 1.0 / obj2.dx;
 
         for k in start.z..end.z {
-            let z_base = k * self.area;
-            let z = (k as f32 + 0.5) * self.dx - self.half_size.z;
+            let z_base = k * obj1.area;
+            let z = (k as f32 + 0.5) * obj1.dx - obj1.half_size.z;
             for j in start.y..end.y {
-                let yz_base = z_base + j * self.shape.x;
-                let y = (j as f32 + 0.5) * self.dx - self.half_size.y;
+                let yz_base = z_base + j * obj1.shape.x;
+                let y = (j as f32 + 0.5) * obj1.dx - obj1.half_size.y;
                 for i in start.x..end.x {
                     let index = yz_base + i;
-                    if self.data[index] == CVoxelType::Air {
-                        continue;
-                    }
-                    let x = (i as f32 + 0.5) * self.dx - self.half_size.x;
-                    let coord = Point3::new(x, y, z);
-                    let coord_in_rhs = to_rhs_transform * coord;
-                    let unit_coord = (coord_in_rhs + rhs.half_size) * rhs_inv_dx;
-                    let [range_x, range_y, range_z] = axis_ranges(&unit_coord, &rhs.shape);
+                    if obj1.data[index] == CVoxelType::Edge {
+                        let x = (i as f32 + 0.5) * obj1.dx - obj1.half_size.x;
+                        let coord = Point3::new(x, y, z);
+                        let coord_in_obj2 = to_obj2_transform * coord;
+                        let unit_coord = (coord_in_obj2 + obj2.half_size) * obj2_inv_dx;
+                        let [range_x, range_y, range_z] = axis_ranges(&unit_coord, &obj2.shape);
 
-                    for rk in range_z {
-                        let rz_base = rk * rhs.area;
-                        for rj in range_y.clone() {
-                            let rzy_base = rz_base + rj * rhs.shape.x;
-                            for ri in range_x.clone() {
-                                let rindex = rzy_base + ri;
-                                if rhs.data[rindex] != CVoxelType::Air {
+                        for rk in range_z {
+                            let rz_base = rk * obj2.area;
+                            let rz = (rk as f32 + 0.5) * obj2.dx - obj2.half_size.z;
+                            for rj in range_y.clone() {
+                                let rzy_base = rz_base + rj * obj2.shape.x;
+                                let ry = (rj as f32 + 0.5) * obj2.dx - obj2.half_size.y;
+                                for ri in range_x.clone() {
+                                    let rindex = rzy_base + ri;
+                                    if obj2.data[rindex] == CVoxelType::Edge {
+                                        let rx = (ri as f32 + 0.5) * obj2.dx - obj2.half_size.x;
+                                        let p2_in2 = Point3::new(rx, ry, rz);
+                                        contact_between(obj1, obj2, &coord, &p2_in2, &mut self.contacts, i1, i2);
+                                    }
+                                }
+                            }
+                        }
+                    } else if obj1.data[index] == CVoxelType::Corner {
+                        let x = (i as f32 + 0.5) * obj1.dx - obj1.half_size.x;
+                        let coord = Point3::new(x, y, z);
+                        let coord_in_obj2 = to_obj2_transform * coord;
+                        let unit_coord = (coord_in_obj2 + obj2.half_size) * obj2_inv_dx;
+                        let [range_x, range_y, range_z] = axis_ranges(&unit_coord, &obj2.shape);
+
+                        for rk in range_z {
+                            let rz_base = rk * obj2.area;
+                            let rz = (rk as f32 + 0.5) * obj2.dx - obj2.half_size.z;
+                            for rj in range_y.clone() {
+                                let rzy_base = rz_base + rj * obj2.shape.x;
+                                let ry = (rj as f32 + 0.5) * obj2.dx - obj2.half_size.y;
+                                for ri in range_x.clone() {
+                                    let rindex = rzy_base + ri;
+                                    if obj2.data[rindex] == CVoxelType::Face
+                                        || obj2.data[rindex] == CVoxelType::Edge
+                                        || obj2.data[rindex] == CVoxelType::Corner
+                                    {
+                                        let rx = (ri as f32 + 0.5) * obj2.dx - obj2.half_size.x;
+                                        let p2_in2 = Point3::new(rx, ry, rz);
+                                        contact_between(obj1, obj2, &coord, &p2_in2, &mut self.contacts, i1, i2);
+                                    }
                                 }
                             }
                         }
@@ -227,10 +383,6 @@ impl PVoxels {
                 }
             }
         }
+        
     }
-}
-
-pub struct Contact {
-    pub point: Point3<f32>,
-    pub normal: Vector3<f32>,
 }

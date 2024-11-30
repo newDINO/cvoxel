@@ -224,24 +224,6 @@ impl CVoxels {
         }
     }
 
-    pub fn get_x_offset(&self, index: usize, x: usize, offset: isize) -> CVoxelType {
-        let x_after_offset = (x as isize + offset) as usize;
-        if x_after_offset == 0 || x_after_offset + 1 >= self.shape.x {
-            CVoxelType::Air
-        } else {
-            let offset_index = (index as isize + offset) as usize;
-            self.data[offset_index]
-        }
-    }
-
-    pub fn xneg_neighbor(&self, index: usize, x: usize) -> CVoxelType {
-        if x == 0 {
-            CVoxelType::Air
-        } else {
-            self.data[index - 1]
-        }
-    }
-
     /// Regenerate VoxelCType.
     pub fn regenerate_type(&mut self) {
         for k in 0..self.shape.z {

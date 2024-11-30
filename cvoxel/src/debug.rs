@@ -110,7 +110,8 @@ impl CVoxels {
             }
         }
         SufMesh {
-            position: vertices, color: colors
+            position: vertices,
+            color: colors,
         }
     }
 }

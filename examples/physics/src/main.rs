@@ -1,16 +1,25 @@
-use bevy::{prelude::*, render::{mesh::{Indices, PrimitiveTopology, VertexAttributeValues}, render_asset::RenderAssetUsages}};
+use bevy::{
+    prelude::*,
+    render::{
+        mesh::{Indices, PrimitiveTopology, VertexAttributeValues},
+        render_asset::RenderAssetUsages,
+    },
+};
 use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin};
 use cvoxel::CVoxels;
 use nalgebra::{Isometry3, Vector3};
-use pvoxel::{PVoxels, RigidType};
+use pvoxel::{PVoxels, PhysicsWorld, RigidType};
+use bevy_egui::{egui, EguiContexts, EguiPlugin};
 
 fn main() {
     App::new()
         .add_plugins(PanOrbitCameraPlugin)
         .add_plugins(DefaultPlugins)
+        .add_plugins(EguiPlugin)
         .add_systems(Startup, setup)
         .add_systems(Update, update_from_pvoxel_transform)
-        .add_systems(Update, update_physics)
+        // .add_systems(Update, update_physics)
+        .add_systems(Update, ui)
         .run();
 }
 
@@ -44,17 +53,12 @@ fn setup(
 
     // meshes
     let shapes = [
-        Cuboid::new(10.0, 1.0,10.0).mesh().build(),
+        Cuboid::new(10.0, 1.0, 10.0).mesh().build(),
         Torus::new(1.0, 3.0).mesh().build(),
     ];
-    let rigid_tys = [
-        RigidType::Fixed,
-        RigidType::Dynamic,
-    ];
-    let poses = [
-        Vector3::new(0.0, -0.5, 0.0),
-        Vector3::new(0.0, 2.0, 0.0),
-    ];
+    let rigid_tys = [RigidType::Fixed, RigidType::Dynamic];
+    let poses = [Vector3::new(0.0, -0.5, 0.0), Vector3::new(0.0, 2.0, 0.0)];
+    
     let material_handle = materials.add(Color::WHITE);
     let mut objs = Vec::with_capacity(shapes.len());
     let mut ids = Vec::with_capacity(shapes.len());
@@ -64,58 +68,88 @@ fn setup(
         cvoxels.transform.translation.vector = poses[i];
         let surface_mesh = cvoxel_surface_mesh(&cvoxels);
         let mesh_handle = meshes.add(surface_mesh);
-        let id = commands.spawn(PbrBundle {
-            mesh: mesh_handle,
-            material: material_handle.clone(),
-            ..Default::default()
-        }).id();
+        let id = commands
+            .spawn(PbrBundle {
+                mesh: mesh_handle,
+                material: material_handle.clone(),
+                ..Default::default()
+            })
+            .id();
         objs.push(PVoxels::from_cvoxels(cvoxels, 1.0, rigid_tys[i]));
         ids.push(id);
     }
-    commands.insert_resource(Objects {
-        objs, ids
+    commands.insert_resource(Physics {
+        world: PhysicsWorld {
+            objects: objs,
+            contacts: Vec::new(),
+        },
+        ids,
     });
 }
-
-fn update_from_pvoxel_transform(objects: Res<Objects>, mut query: Query<&mut Transform>) {
-    for i in 0..objects.objs.len() {
-        *query.get_mut(objects.ids[i]).unwrap() = isometry_to_transform(&objects.objs[i].transform);
+fn update_from_pvoxel_transform(physics: Res<Physics>, mut query: Query<&mut Transform>) {
+    for i in 0..physics.ids.len() {
+        let mut transform = query.get_mut(physics.ids[i]).unwrap();
+        *transform = isometry_to_transform(&physics.world.objects[i].transform);
     }
 }
-
-fn update_physics(objects: ResMut<Objects>, time: Res<Time>) {
-    let objects = objects.into_inner();
-    let dt = time.delta_seconds();
-    // gravity
-    for objects in &mut objects.objs {
-        if objects.ty == RigidType::Fixed {
-            continue;
+fn ui(
+    mut contexts: EguiContexts,
+    mut panorbit: Query<&mut PanOrbitCamera>,
+    physics: ResMut<Physics>,
+    time: Res<Time>,
+) {
+    let response = egui::Window::new("Voxel Objects").show(contexts.ctx_mut(), |ui| {
+        let physics = physics.into_inner();
+        let dt = time.delta_seconds();
+        // gravity
+        for obj in &mut physics.world.objects {
+            if obj.ty == RigidType::Fixed {
+                continue;
+            }
+            obj.vel.y -= dt * 9.8;
         }
-        objects.vel.y -= dt * 9.8;
-    }
 
-    // collision handling
+        // contacts
+        physics.world.gen_contacts();
 
-    // time integral
-    for objects in &mut objects.objs {
-        if objects.ty == RigidType::Fixed {
-            continue;
+        ui.label(format!("contacts: {}", physics.world.contacts.len()));
+
+        physics.world.resolve_contacts(3);
+
+        // integrate
+        physics.world.step_dt(dt);
+
+        // properties
+        for obj in &physics.world.objects {
+            ui.label(format!("{:?}", obj.transform.translation));
+            ui.label(format!("{:?}", obj.vel));
+            ui.separator();
         }
-        objects.step_dt(dt);
+    });
+    let mut panorbit = panorbit.single_mut();
+    if let Some(inner) = response {
+        let response = inner.response;
+
+        if response.ctx.is_using_pointer() {
+            panorbit.enabled = false;
+        } else {
+            panorbit.enabled = true;
+        }
+    } else {
+        panorbit.enabled = true;
     }
 }
 
 // structs
 #[derive(Resource)]
-struct Objects {
-    objs: Vec<PVoxels>,
-    ids: Vec<Entity>
+struct Physics {
+    world: PhysicsWorld,
+    ids: Vec<Entity>,
 }
 
+
 // utils
-fn isometry_to_transform(
-    isometry: &Isometry3<f32>,
-) -> Transform {
+fn isometry_to_transform(isometry: &Isometry3<f32>) -> Transform {
     let mut transform = Transform::IDENTITY;
     transform.translation = Vec3::from_array(isometry.translation.vector.data.0[0]);
     transform.rotation = Quat::from_array(isometry.rotation.quaternion().coords.data.0[0]);
