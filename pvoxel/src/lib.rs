@@ -1,6 +1,6 @@
 use std::ops::{Deref, DerefMut};
 
-use cvoxel::{CVoxelType, CVoxels};
+use cvoxel::{ty_of_data, CVoxelType, CVoxels, FaceDir, VoxelData};
 use nalgebra::{Matrix3, Point3, UnitQuaternion, Vector3};
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -63,7 +63,7 @@ impl PVoxels {
                 let y = (j as f32 + 0.5) * self.dx - self.half_size.y;
                 for i in 0..self.shape.x {
                     let index = jk_base + i;
-                    if self.data[index] == CVoxelType::Air {
+                    if ty_of_data(self.data[index]) == CVoxelType::Air {
                         continue;
                     }
                     counts += 1.0;
@@ -90,7 +90,7 @@ impl PVoxels {
                 let y_to_cm = (j as f32 + 0.5) * self.dx - self.half_size.y - self.local_cm.y;
                 for i in 0..self.shape.x {
                     let index = jk_base + i;
-                    if self.data[index] == CVoxelType::Air {
+                    if ty_of_data(self.data[index]) == CVoxelType::Air {
                         continue;
                     }
                     let x_to_cm = (i as f32 + 0.5) * self.dx - self.half_size.x - self.local_cm.x;
@@ -134,7 +134,7 @@ impl PVoxels {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Contact {
     pub point: Point3<f32>,
     pub normal: Vector3<f32>,
@@ -197,7 +197,16 @@ impl PhysicsWorld {
             let lambda_n = dv * m_eff_n;
 
             // friction
-            let t = contact.normal.cross(&(vp.cross(&contact.normal))).normalize();
+            if 1.0 - contact.normal.dot(&vp).abs() < 1e-3 {
+                let impluse = lambda_n * contact.normal;
+                dynamic.ang_vel += inv_inertia * r.cross(&impluse);
+                dynamic.vel += dynamic.inv_mass * impluse;
+                return;
+            }
+            let t = contact
+                .normal
+                .cross(&(vp.cross(&contact.normal)))
+                .normalize();
             let vpt = vp.dot(&t);
             let cross_t = r.cross(&t);
             let m_eff_t = 1.0 / (dynamic.inv_mass + cross_t.dot(&(inv_inertia * cross_t)));
@@ -283,8 +292,7 @@ impl PhysicsWorld {
             ]
         }
 
-        #[inline]
-        fn contact_between(
+        fn sphere_contact(
             voxels1: &PVoxels,
             voxels2: &PVoxels,
             p1_in1: &Point3<f32>,
@@ -303,7 +311,40 @@ impl PhysicsWorld {
             }
             let n = 1.0 / dist * n;
             let point = p1.lerp(&p2, 0.5);
-            contacts.push(Contact { point, normal: n , i1, i2})
+            contacts.push(Contact {
+                point,
+                normal: n,
+                i1,
+                i2,
+            })
+        }
+
+        fn face_contact(
+            voxels1: &PVoxels,
+            voxels2: &PVoxels,
+            p1_in1: &Point3<f32>,
+            contacts: &mut Vec<Contact>,
+            i1: usize,
+            i2: usize,
+            face_dir: FaceDir,
+        ) {
+            const DIRS: [Vector3<f32>; 6] = [
+                Vector3::new(-1.0, 0.0, 0.0),
+                Vector3::new(1.0, 0.0, 0.0),
+                Vector3::new(0.0, -1.0, 0.0),
+                Vector3::new(0.0, 1.0, 0.0),
+                Vector3::new(0.0, 0.0, -1.0),
+                Vector3::new(0.0, 0.0, 1.0),
+            ];
+            let n = voxels2.transform.rotation * DIRS[face_dir as u8 as usize];
+            let p1 = voxels1.transform * p1_in1;
+            let point = p1 - voxels1.dx * 0.5 * n;
+            contacts.push(Contact {
+                point,
+                normal: n,
+                i1,
+                i2,
+            })
         }
 
         // 2. process
@@ -330,7 +371,10 @@ impl PhysicsWorld {
                 let y = (j as f32 + 0.5) * obj1.dx - obj1.half_size.y;
                 for i in start.x..end.x {
                     let index = yz_base + i;
-                    if obj1.data[index] == CVoxelType::Edge {
+
+                    let ty1 = ty_of_data(obj1.data[index]);
+
+                    if ty1 == CVoxelType::Edge {
                         let x = (i as f32 + 0.5) * obj1.dx - obj1.half_size.x;
                         let coord = Point3::new(x, y, z);
                         let coord_in_obj2 = to_obj2_transform * coord;
@@ -345,18 +389,29 @@ impl PhysicsWorld {
                                 let ry = (rj as f32 + 0.5) * obj2.dx - obj2.half_size.y;
                                 for ri in range_x.clone() {
                                     let rindex = rzy_base + ri;
-                                    if obj2.data[rindex] == CVoxelType::Edge {
+
+                                    let ty2 = ty_of_data(obj2.data[rindex]);
+
+                                    if ty2 == CVoxelType::Edge {
                                         let rx = (ri as f32 + 0.5) * obj2.dx - obj2.half_size.x;
                                         let p2_in2 = Point3::new(rx, ry, rz);
-                                        contact_between(obj1, obj2, &coord, &p2_in2, &mut self.contacts, i1, i2);
+                                        sphere_contact(
+                                            obj1,
+                                            obj2,
+                                            &coord,
+                                            &p2_in2,
+                                            &mut self.contacts,
+                                            i1,
+                                            i2,
+                                        );
                                     }
                                 }
                             }
                         }
-                    } else if obj1.data[index] == CVoxelType::Corner {
+                    } else if ty1 == CVoxelType::Corner {
                         let x = (i as f32 + 0.5) * obj1.dx - obj1.half_size.x;
-                        let coord = Point3::new(x, y, z);
-                        let coord_in_obj2 = to_obj2_transform * coord;
+                        let p1_in1 = Point3::new(x, y, z);
+                        let coord_in_obj2 = to_obj2_transform * p1_in1;
                         let unit_coord = (coord_in_obj2 + obj2.half_size) * obj2_inv_dx;
                         let [range_x, range_y, range_z] = axis_ranges(&unit_coord, &obj2.shape);
 
@@ -368,13 +423,33 @@ impl PhysicsWorld {
                                 let ry = (rj as f32 + 0.5) * obj2.dx - obj2.half_size.y;
                                 for ri in range_x.clone() {
                                     let rindex = rzy_base + ri;
-                                    if obj2.data[rindex] == CVoxelType::Face
-                                        || obj2.data[rindex] == CVoxelType::Edge
-                                        || obj2.data[rindex] == CVoxelType::Corner
+
+                                    let voxel_data2 = VoxelData::from_u8(obj2.data[rindex]);
+
+                                    if voxel_data2.ty == CVoxelType::Face {
+                                        face_contact(
+                                            obj1,
+                                            obj2,
+                                            &p1_in1,
+                                            &mut self.contacts,
+                                            i1,
+                                            i2,
+                                            voxel_data2.dir,
+                                        );
+                                    } else if voxel_data2.ty == CVoxelType::Edge
+                                        || voxel_data2.ty == CVoxelType::Corner
                                     {
                                         let rx = (ri as f32 + 0.5) * obj2.dx - obj2.half_size.x;
                                         let p2_in2 = Point3::new(rx, ry, rz);
-                                        contact_between(obj1, obj2, &coord, &p2_in2, &mut self.contacts, i1, i2);
+                                        sphere_contact(
+                                            obj1,
+                                            obj2,
+                                            &p1_in1,
+                                            &p2_in2,
+                                            &mut self.contacts,
+                                            i1,
+                                            i2,
+                                        );
                                     }
                                 }
                             }
@@ -383,6 +458,5 @@ impl PhysicsWorld {
                 }
             }
         }
-        
     }
 }

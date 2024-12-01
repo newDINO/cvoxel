@@ -5,11 +5,11 @@ use bevy::{
         render_asset::RenderAssetUsages,
     },
 };
+use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin};
 use cvoxel::CVoxels;
 use nalgebra::{Isometry3, Vector3};
-use pvoxel::{PVoxels, PhysicsWorld, RigidType};
-use bevy_egui::{egui, EguiContexts, EguiPlugin};
+use pvoxel::{Contact, PVoxels, PhysicsWorld, RigidType};
 
 fn main() {
     App::new()
@@ -54,11 +54,11 @@ fn setup(
     // meshes
     let shapes = [
         Cuboid::new(10.0, 1.0, 10.0).mesh().build(),
-        Torus::new(1.0, 3.0).mesh().build(),
+        Torus::new(2.0, 3.0).mesh().build(),
     ];
     let rigid_tys = [RigidType::Fixed, RigidType::Dynamic];
     let poses = [Vector3::new(0.0, -0.5, 0.0), Vector3::new(0.0, 2.0, 0.0)];
-    
+
     let material_handle = materials.add(Color::WHITE);
     let mut objs = Vec::with_capacity(shapes.len());
     let mut ids = Vec::with_capacity(shapes.len());
@@ -84,6 +84,9 @@ fn setup(
             contacts: Vec::new(),
         },
         ids,
+        paused: true,
+        contacts: 0,
+        sample_contact: None,
     });
 }
 fn update_from_pvoxel_transform(physics: Res<Physics>, mut query: Query<&mut Transform>) {
@@ -101,25 +104,40 @@ fn ui(
     let response = egui::Window::new("Voxel Objects").show(contexts.ctx_mut(), |ui| {
         let physics = physics.into_inner();
         let dt = time.delta_seconds();
-        // gravity
-        for obj in &mut physics.world.objects {
-            if obj.ty == RigidType::Fixed {
-                continue;
+
+        ui.checkbox(&mut physics.paused, "pause");
+
+        let mut step = || {
+            // gravity
+            for obj in &mut physics.world.objects {
+                if obj.ty == RigidType::Fixed {
+                    continue;
+                }
+                obj.vel.y -= dt * 9.8;
             }
-            obj.vel.y -= dt * 9.8;
+    
+            // contacts
+            physics.world.gen_contacts();
+            
+            physics.contacts = physics.world.contacts.len();
+            physics.sample_contact = physics.world.contacts.first().copied();
+    
+            physics.world.resolve_contacts(3);
+    
+            // integrate
+            physics.world.step_dt(dt);
+        };
+        if !physics.paused {
+            step();
+        }
+        if ui.button("step").clicked() {
+            step();
         }
 
-        // contacts
-        physics.world.gen_contacts();
-
-        ui.label(format!("contacts: {}", physics.world.contacts.len()));
-
-        physics.world.resolve_contacts(3);
-
-        // integrate
-        physics.world.step_dt(dt);
-
         // properties
+        ui.label(format!("contacts: {}", physics.contacts));
+        ui.label(format!("sample_contact: {:?}", physics.sample_contact));
+        ui.separator();
         for obj in &physics.world.objects {
             ui.label(format!("{:?}", obj.transform.translation));
             ui.label(format!("{:?}", obj.vel));
@@ -145,8 +163,10 @@ fn ui(
 struct Physics {
     world: PhysicsWorld,
     ids: Vec<Entity>,
+    paused: bool,
+    contacts: usize,
+    sample_contact: Option<Contact>,
 }
-
 
 // utils
 fn isometry_to_transform(isometry: &Isometry3<f32>) -> Transform {

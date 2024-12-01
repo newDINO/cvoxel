@@ -1,6 +1,6 @@
 use nalgebra::Vector3;
 
-use crate::{CVoxelType, CVoxels};
+use crate::{ty_of_data, CVoxelType, CVoxels};
 
 const NZ_VERTICES: [Vector3<f32>; 6] = [
     Vector3::new(0.0, 0.0, 0.0),
@@ -73,8 +73,8 @@ impl CVoxels {
                     let x_base = i as f32 * self.dx - self.half_size.x;
                     let base = Vector3::new(x_base, y_base, z_base);
 
-                    let color = match self.data[index] {
-                        CVoxelType::Corner => [1.0, 0.0, 0.0, 1.0],
+                    let color = match ty_of_data(self.data[index]) {
+                        CVoxelType::Corner => [0.0, 1.0, 1.0, 1.0],
                         CVoxelType::Edge => [1.0, 1.0, 0.0, 1.0],
                         CVoxelType::Face => [1.0, 1.0, 1.0, 1.0],
                         _ => continue,
@@ -88,22 +88,27 @@ impl CVoxels {
                         }
                     };
 
-                    if k == 0 || self.data[index - self.area] == CVoxelType::Air {
+                    if k == 0 || ty_of_data(self.data[index - self.area]) == CVoxelType::Air {
                         push_vertex(&NZ_VERTICES);
                     }
-                    if k == self.shape.z - 1 || self.data[index + self.area] == CVoxelType::Air {
+                    if k == self.shape.z - 1
+                        || ty_of_data(self.data[index + self.area]) == CVoxelType::Air
+                    {
                         push_vertex(&PZ_VERTICES);
                     }
-                    if j == 0 || self.data[index - self.shape.x] == CVoxelType::Air {
+                    if j == 0 || ty_of_data(self.data[index - self.shape.x]) == CVoxelType::Air {
                         push_vertex(&NY_VERTICES);
                     }
-                    if j == self.shape.y - 1 || self.data[index + self.shape.x] == CVoxelType::Air {
+                    if j == self.shape.y - 1
+                        || ty_of_data(self.data[index + self.shape.x]) == CVoxelType::Air
+                    {
                         push_vertex(&PY_VERTICES);
                     }
-                    if i == 0 || self.data[index - 1] == CVoxelType::Air {
+                    if i == 0 || ty_of_data(self.data[index - 1]) == CVoxelType::Air {
                         push_vertex(&NX_VERTICES);
                     }
-                    if i == self.shape.x - 1 || self.data[index + 1] == CVoxelType::Air {
+                    if i == self.shape.x - 1 || ty_of_data(self.data[index + 1]) == CVoxelType::Air
+                    {
                         push_vertex(&PX_VERTICES);
                     }
                 }

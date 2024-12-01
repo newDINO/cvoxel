@@ -183,7 +183,7 @@ impl Sub<Vector3<f32>> for Aabb {
     }
 }
 
-#[derive(PartialEq, Eq, num_enum::TryFromPrimitive, Clone, Copy)]
+#[derive(PartialEq, Eq, TryFromPrimitive, Clone, Copy, Debug)]
 #[repr(u8)]
 pub enum CVoxelType {
     Body,
@@ -191,6 +191,49 @@ pub enum CVoxelType {
     Edge,
     Corner,
     Air,
+}
+
+#[derive(PartialEq, Eq, Clone, Copy, TryFromPrimitive, Debug)]
+#[repr(u8)]
+pub enum FaceDir {
+    XN,
+    XP,
+    YN,
+    YP,
+    ZN,
+    ZP,
+}
+
+#[derive(PartialEq, Eq, Debug)]
+pub struct VoxelData {
+    pub ty: CVoxelType,
+    pub dir: FaceDir,
+}
+impl VoxelData {
+    /// ```
+    /// use cvoxel::{VoxelData, CVoxelType, FaceDir};
+    /// let original = VoxelData {
+    ///     ty: CVoxelType::Edge,
+    ///     dir: FaceDir::YN,
+    /// };
+    /// let data = original.to_u8();
+    /// let back = VoxelData::from_u8(data);
+    /// assert_eq!(original, back);
+    /// ```
+    pub fn to_u8(&self) -> u8 {
+        self.ty as u8 | ((self.dir as u8) << 3)
+    }
+    pub fn from_u8(value: u8) -> Self {
+        let ty = value & 0b111;
+        let dir = value >> 3;
+        Self {
+            ty: CVoxelType::try_from_primitive(ty).unwrap(),
+            dir: FaceDir::try_from_primitive(dir).unwrap(),
+        }
+    }
+}
+pub fn ty_of_data(value: u8) -> CVoxelType {
+    CVoxelType::try_from_primitive(value & 0b111).unwrap()
 }
 
 #[derive(Default)]
@@ -203,7 +246,7 @@ pub struct CVoxels {
     pub half_size: Vector3<f32>,
     /// The position part is the center of the voxel object.
     pub transform: Isometry3<f32>,
-    pub data: Vec<CVoxelType>,
+    pub data: Vec<u8>,
 }
 impl CVoxels {
     /// Aabb in world space
@@ -233,35 +276,51 @@ impl CVoxels {
                 for i in 0..self.shape.x {
                     let coord = k_part + j_part + i;
 
-                    if self.data[coord] == CVoxelType::Air {
+                    let voxel_data = VoxelData::from_u8(self.data[coord]);
+                    let ty = voxel_data.ty;
+                    if ty == CVoxelType::Air {
                         continue;
                     }
 
                     let mut air_axis_cound: u8 = 0;
+                    let mut face_dir = FaceDir::ZN;
 
-                    if k == 0
-                        || k == self.shape.z - 1
-                        || self.data[coord - self.area] == CVoxelType::Air
-                        || self.data[coord + self.area] == CVoxelType::Air
+                    // z
+                    if k == 0 || ty_of_data(self.data[coord - self.area]) == CVoxelType::Air {
+                        air_axis_cound += 1;
+                        face_dir = FaceDir::ZN;
+                    } else if k == self.shape.z - 1
+                        || ty_of_data(self.data[coord + self.area]) == CVoxelType::Air
                     {
                         air_axis_cound += 1;
+                        face_dir = FaceDir::ZP;
                     };
-                    if j == 0
-                        || j == self.shape.y - 1
-                        || self.data[coord - self.shape.x] == CVoxelType::Air
-                        || self.data[coord + self.shape.x] == CVoxelType::Air
+                    // y
+                    if j == 0 || ty_of_data(self.data[coord - self.shape.x]) == CVoxelType::Air {
+                        air_axis_cound += 1;
+                        face_dir = FaceDir::YN;
+                    } else if j == self.shape.y - 1
+                        || ty_of_data(self.data[coord + self.shape.x]) == CVoxelType::Air
                     {
                         air_axis_cound += 1;
+                        face_dir = FaceDir::YP;
                     };
-                    if i == 0
-                        || i == self.shape.x - 1
-                        || self.data[coord - 1] == CVoxelType::Air
-                        || self.data[coord + 1] == CVoxelType::Air
+                    // x
+                    if i == 0 || ty_of_data(self.data[coord - 1]) == CVoxelType::Air {
+                        air_axis_cound += 1;
+                        face_dir = FaceDir::XN;
+                    } else if i == self.shape.x - 1
+                        || ty_of_data(self.data[coord + 1]) == CVoxelType::Air
                     {
                         air_axis_cound += 1;
+                        face_dir = FaceDir::XP;
                     };
 
-                    self.data[coord] = CVoxelType::try_from_primitive(air_axis_cound).unwrap();
+                    self.data[coord] = VoxelData {
+                        ty: CVoxelType::try_from_primitive(air_axis_cound).unwrap(),
+                        dir: face_dir,
+                    }
+                    .to_u8();
                 }
             }
         }
@@ -341,9 +400,21 @@ impl CVoxels {
                         }
                     }
                     if inside {
-                        data.push(CVoxelType::Body);
+                        data.push(
+                            VoxelData {
+                                ty: CVoxelType::Body,
+                                dir: FaceDir::XN,
+                            }
+                            .to_u8(),
+                        );
                     } else {
-                        data.push(CVoxelType::Air)
+                        data.push(
+                            VoxelData {
+                                ty: CVoxelType::Air,
+                                dir: FaceDir::XN,
+                            }
+                            .to_u8(),
+                        )
                     }
                 }
             }
@@ -677,7 +748,7 @@ impl CVoxels {
                 let y = (j as f32 + 0.5) * self.dx - self.half_size.y;
                 for i in start.x..end.x {
                     let index = yz_base + i;
-                    if self.data[index] == CVoxelType::Air {
+                    if ty_of_data(self.data[index]) == CVoxelType::Air {
                         continue;
                     }
                     let x = (i as f32 + 0.5) * self.dx - self.half_size.x;
@@ -692,7 +763,7 @@ impl CVoxels {
                             let rzy_base = rz_base + rj * rhs.shape.x;
                             for ri in range_x.clone() {
                                 let rindex = rzy_base + ri;
-                                if rhs.data[rindex] != CVoxelType::Air {
+                                if ty_of_data(rhs.data[rindex]) != CVoxelType::Air {
                                     return Some((index, rindex));
                                 }
                             }
