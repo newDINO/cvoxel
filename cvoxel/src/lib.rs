@@ -249,6 +249,19 @@ pub struct CVoxels {
     pub data: Vec<u8>,
 }
 impl CVoxels {
+    pub fn new(shape: Vector3<usize>, dx: f32, transform: Isometry3<f32>, data: Vec<u8>) -> Self {
+        let area = shape.x * shape.y;
+        let half_size = 0.5 * dx * shape.cast::<f32>();
+        Self {
+            shape,
+            area,
+            dx,
+            half_size,
+            transform,
+            data,
+        }
+    }
+
     /// Aabb in world space
     pub fn aabb(&self) -> Aabb {
         let ws_half_extents =

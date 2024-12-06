@@ -18,6 +18,7 @@ fn main() {
         .add_plugins(EguiPlugin)
         .add_systems(Startup, setup)
         .add_systems(Update, update_from_pvoxel_transform)
+        .add_systems(Update, draw_gizmos)
         // .add_systems(Update, update_physics)
         .add_systems(Update, ui)
         .run();
@@ -53,11 +54,21 @@ fn setup(
 
     // meshes
     let shapes = [
-        Cuboid::new(10.0, 1.0, 10.0).mesh().build(),
-        Torus::new(2.0, 3.0).mesh().build(),
+        Cuboid::new(20.0, 0.3, 20.0).mesh().build(),
+        Cuboid::new(1.0, 1.0, 1.0).mesh().build(),
+        // Torus::new(0.5, 1.5).mesh().build(),
+        // Cuboid::new(1.0, 1.0, 1.0).mesh().build(),
     ];
-    let rigid_tys = [RigidType::Fixed, RigidType::Dynamic];
-    let poses = [Vector3::new(0.0, -0.5, 0.0), Vector3::new(0.0, 2.0, 0.0)];
+    let rigid_tys = [
+        RigidType::Fixed,
+        RigidType::Dynamic,
+        // RigidType::Dynamic,
+    ];
+    let poses = [
+        Vector3::new(0.0, -0.5, 0.0),
+        Vector3::new(0.0, 2.0, 0.0),
+        // Vector3::new(0.0, 4.0, 1.0),
+    ];
 
     let material_handle = materials.add(Color::WHITE);
     let mut objs = Vec::with_capacity(shapes.len());
@@ -89,25 +100,40 @@ fn setup(
         sample_contact: None,
     });
 }
+
 fn update_from_pvoxel_transform(physics: Res<Physics>, mut query: Query<&mut Transform>) {
     for i in 0..physics.ids.len() {
         let mut transform = query.get_mut(physics.ids[i]).unwrap();
         *transform = isometry_to_transform(&physics.world.objects[i].transform);
     }
 }
+
+fn draw_gizmos(
+    mut gizmos: Gizmos,
+    physics: Res<Physics>,
+) {
+    gizmos.axes(Transform::IDENTITY, 1.0);
+    for obj in &physics.world.objects {
+        let center = vector_to_vec(obj.transform.translation.vector);
+        let k = 0.3;
+        gizmos.arrow(center, center + vector_to_vec(obj.vel) * k, Color::linear_rgb(1.0, 1.0, 0.0));
+        gizmos.arrow(center, center + vector_to_vec(obj.ang_vel) * k, Color::linear_rgb(0.0, 1.0, 1.0));
+    }
+}
+
 fn ui(
     mut contexts: EguiContexts,
     mut panorbit: Query<&mut PanOrbitCamera>,
     physics: ResMut<Physics>,
-    time: Res<Time>,
+    // time: Res<Time>,
 ) {
     let response = egui::Window::new("Voxel Objects").show(contexts.ctx_mut(), |ui| {
         let physics = physics.into_inner();
-        let dt = time.delta_seconds();
+        let dt = 1.0 / 60.0;
 
         ui.checkbox(&mut physics.paused, "pause");
 
-        let mut step = || {
+        let mut step = |dt: f32| {
             // gravity
             for obj in &mut physics.world.objects {
                 if obj.ty == RigidType::Fixed {
@@ -115,23 +141,24 @@ fn ui(
                 }
                 obj.vel.y -= dt * 9.8;
             }
-    
+
             // contacts
             physics.world.gen_contacts();
-            
+
+            // debug
             physics.contacts = physics.world.contacts.len();
             physics.sample_contact = physics.world.contacts.first().copied();
-    
-            physics.world.resolve_contacts(3);
-    
+
+            physics.world.resolve_contacts(100);
+
             // integrate
             physics.world.step_dt(dt);
         };
         if !physics.paused {
-            step();
+            step(dt);
         }
         if ui.button("step").clicked() {
-            step();
+            step(dt);
         }
 
         // properties
@@ -169,6 +196,10 @@ struct Physics {
 }
 
 // utils
+fn vector_to_vec(v: Vector3<f32>) -> Vec3 {
+    Vec3::from_array(v.data.0[0])
+}
+
 fn isometry_to_transform(isometry: &Isometry3<f32>) -> Transform {
     let mut transform = Transform::IDENTITY;
     transform.translation = Vec3::from_array(isometry.translation.vector.data.0[0]);
